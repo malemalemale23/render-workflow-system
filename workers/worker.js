@@ -2,6 +2,7 @@ import axios from "axios";
 import dotenv from "dotenv";
 dotenv.config();
 import IORedis from "ioredis";
+const connection = new IORedis(process.env.REDIS_URL);
 import { Worker } from "bullmq";
 
 import supabase from "../config/db.js";
@@ -9,7 +10,7 @@ import { updateProgress } from "../services/progressService.js";
 
 
 
-const connection = new IORedis(process.env.REDIS_URL);
+
 
 const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;
