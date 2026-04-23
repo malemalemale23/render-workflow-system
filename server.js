@@ -26,26 +26,24 @@ try {
   console.error("Redis init fail");
 }
 
-// ===== CACHE =====
+// ===== CACHE LIST =====
 let cachedLists = null;
 let lastFetch = 0;
 const CACHE_TTL = 60000;
 
 // ===== BASE ROUTES =====
-app.get("/", (_, res) => res.send("OK"));
+app.get("/", (_, res) => res.send("Workflow system running"));
 app.get("/webhook", (_, res) => res.send("ok"));
 
-// ===== WEBHOOK =====
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200); // 🔥 always respond first
 
-  console.log("1. webhook hit");
+// =======================================================
+// 🔥 MAIN WEBHOOK
+// =======================================================
+app.post("/webhook", async (req, res) => {
+  res.sendStatus(200); // ⚠️ ต้องตอบทันที
 
   const action = req.body?.action;
-  if (!action || action.type !== "updateCheckItemStateOnCard") {
-    console.log("2. skip action");
-    return;
-  }
+  if (!action || action.type !== "updateCheckItemStateOnCard") return;
 
   const cardId = action.data.card.id;
   const boardId = action.data.board.id;
@@ -54,22 +52,21 @@ app.post("/webhook", async (req, res) => {
 
   console.log("CLICK:", itemId, state);
 
-  // ===== 🔒 REDIS LOCK (SAFE) =====
+  // ===== REDIS LOCK =====
   try {
     if (redis) {
       const lockKey = `lock:${cardId}`;
       const locked = await redis.get(lockKey);
-      if (locked) {
-        console.log("LOCKED");
-        return;
-      }
-      await redis.set(lockKey, "1", "PX", 1000);
+      if (locked) return;
+      await redis.set(lockKey, "1", "PX", 500);
     }
   } catch (e) {
-    console.error("Redis skip:", e.message);
+    console.log("Redis skip");
   }
 
-  // ===== 🔥 STEP 1: DB LOGIC (SAFE) =====
+  // =======================================================
+  // 🔥 STEP 1: DB LOGIC
+  // =======================================================
   let step = null;
 
   try {
@@ -82,111 +79,153 @@ app.post("/webhook", async (req, res) => {
     if (error) throw error;
     step = data;
 
-    if (step) {
-      console.log("STEP:", step.name);
+    if (!step) return;
 
-      // ❌ BLOCK parent
-      if (!step.parent_id && state === "complete") {
-        const { data: subs } = await supabase
-          .from("steps")
-          .select("*")
-          .eq("parent_id", step.id);
+    // ============================
+    // ✅ SUBSTEP LOGIC
+    // ============================
+    if (step.parent_id) {
 
-        const allDone = subs?.every(s => s.status === "done");
-
-        if (!allDone) {
-          console.log("❌ BLOCK parent");
-
-          await axios.put(
-            `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
-            null,
-            { params: { state: "incomplete", key, token } }
-          );
-          return;
-        }
-      }
-
-      // ✅ update status
+      // update substep
       await supabase
         .from("steps")
         .update({
           status: state === "complete" ? "done" : "pending"
         })
-        .eq("trello_item_id", itemId);
+        .eq("id", step.id);
 
-      // ✅ update progress (SAFE)
-      try {
-        await updateProgress(itemId);
-      } catch (e) {
-        console.error("Progress fail:", e.message);
+      // check siblings
+      const { data: subs } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("parent_id", step.parent_id);
+
+      const allDone = subs.every(s => s.status === "done");
+
+      // get parent
+      const { data: parent } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("id", step.parent_id)
+        .single();
+
+      if (!parent) return;
+
+      // 🔥 sync parent state
+      await axios.put(
+        `https://api.trello.com/1/cards/${cardId}/checkItem/${parent.trello_item_id}`,
+        null,
+        {
+          params: {
+            state: allDone ? "complete" : "incomplete",
+            key,
+            token
+          }
+        }
+      );
+
+      // 🔥 update parent DB
+      await supabase
+        .from("steps")
+        .update({
+          status: allDone ? "done" : "pending"
+        })
+        .eq("id", parent.id);
+    }
+
+    // ============================
+    // ✅ PARENT LOGIC
+    // ============================
+    else {
+
+      // ❌ block ถ้า substep ยังไม่ครบ
+      if (state === "complete") {
+        const { data: subs } = await supabase
+          .from("steps")
+          .select("*")
+          .eq("parent_id", step.id);
+
+        if (subs.length > 0) {
+          const allDone = subs.every(s => s.status === "done");
+
+          if (!allDone) {
+            console.log("❌ BLOCK parent");
+
+            await axios.put(
+              `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
+              null,
+              {
+                params: {
+                  state: "incomplete",
+                  key,
+                  token
+                }
+              }
+            );
+            return;
+          }
+        }
       }
-    } else {
-      console.log("No step found");
+
+      // update parent
+      await supabase
+        .from("steps")
+        .update({
+          status: state === "complete" ? "done" : "pending"
+        })
+        .eq("id", step.id);
+    }
+
+    // ============================
+    // 🔥 UPDATE PROGRESS
+    // ============================
+    try {
+      await updateProgress(itemId);
+    } catch (e) {
+      console.log("progress skip");
     }
 
   } catch (e) {
-    console.error("DB fail:", e.message);
+    console.error("DB FAIL:", e.message);
   }
 
-  // ===== 🔥 STEP 2: TRELO LOGIC (ALWAYS RUN) =====
+
+  // =======================================================
+  // 🔥 STEP 2: MOVE CARD BASED ON PROGRESS
+  // =======================================================
   try {
-    console.log("Fetch checklist");
 
-    const { data } = await axios.get(
-      `https://api.trello.com/1/cards/${cardId}/checklists`,
-      { params: { key, token } }
-    );
+    const { data: parents } = await supabase
+      .from("steps")
+      .select("*")
+      .eq("card_id", cardId)
+      .is("parent_id", null)
+      .order("step_order", { ascending: true });
 
-    const items = data.flatMap(c => c.checkItems);
-    if (!items.length) return;
+    if (!parents || parents.length === 0) return;
 
-    let lastChecked = -1;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].state === "complete") lastChecked = i;
-    }
+    let lastDoneIndex = -1;
 
-    // ❌ RULE 1
-    for (let i = 1; i < items.length; i++) {
-      if (items[i].state === "complete" && items[i - 1].state !== "complete") {
-        await axios.put(
-          `https://api.trello.com/1/cards/${cardId}/checkItem/${items[i].id}`,
-          null,
-          { params: { state: "incomplete", key, token } }
-        );
-        return;
-      }
-    }
-
-    // ❌ RULE 2
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].state === "incomplete") {
-        const hasCheckedAfter = items
-          .slice(i + 1)
-          .some(x => x.state === "complete");
-
-        if (hasCheckedAfter) {
-          await axios.put(
-            `https://api.trello.com/1/cards/${cardId}/checkItem/${items[i].id}`,
-            null,
-            { params: { state: "complete", key, token } }
-          );
-          return;
-        }
+    for (let i = 0; i < parents.length; i++) {
+      if (parents[i].status === "done") {
+        lastDoneIndex = i;
+      } else {
         break;
       }
     }
 
-    // ===== TARGET =====
-    const columnName =
-      lastChecked === -1
-        ? items[0].name
-        : lastChecked < items.length - 1
-        ? items[lastChecked + 1].name
-        : items[lastChecked].name;
+    const targetStep =
+      lastDoneIndex === -1
+        ? parents[0]
+        : lastDoneIndex < parents.length - 1
+        ? parents[lastDoneIndex + 1]
+        : parents[lastDoneIndex];
 
-    if (!columnName) return;
+    if (!targetStep) return;
 
-    // ===== CACHE =====
+    const columnName = targetStep.name;
+
+    // ===== fetch lists =====
     if (!cachedLists || Date.now() - lastFetch > CACHE_TTL) {
       const { data: lists } = await axios.get(
         `https://api.trello.com/1/boards/${boardId}/lists`,
@@ -199,10 +238,7 @@ app.post("/webhook", async (req, res) => {
     const target = cachedLists.find(l => l.name === columnName);
     if (!target) return;
 
-    const currentListId = action.data.listAfter?.id;
-    if (currentListId === target.id) return;
-
-    console.log("MOVE CARD");
+    console.log("MOVE →", columnName);
 
     await axios.put(
       `https://api.trello.com/1/cards/${cardId}`,
@@ -217,11 +253,12 @@ app.post("/webhook", async (req, res) => {
     );
 
   } catch (e) {
-    console.error("Trello logic fail:", e.message);
+    console.error("MOVE FAIL:", e.message);
   }
 });
 
-// ===== START =====
+
+// ===== START SERVER =====
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });

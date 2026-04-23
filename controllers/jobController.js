@@ -71,7 +71,7 @@ export async function createJob(req, res) {
 
         await supabase
           .from("steps")
-          .update({ trello_item_id: subItem.id })
+          .update({ trello_item_id: subItem.id, card_id: card.id })
           .eq("job_id", job.id)
           .eq("parent_id", parentSteps[i].id)
           .eq("step_order", j + 1);

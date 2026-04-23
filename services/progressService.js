@@ -33,13 +33,17 @@ export async function updateProgress(itemId) {
   if (progress === 1) {
     const { data: parent } = await supabase
       .from("steps")
-      .select("trello_item_id")
+      .select("trello_item_id, card_id")
       .eq("id", step.parent_id)
       .single();
 
     await fetch(
-      `https://api.trello.com/1/cards/${parent.trello_item_id}/checkItem/${parent.trello_item_id}?state=complete&key=${process.env.TRELLO_KEY}&token=${process.env.TRELLO_TOKEN}`,
-      { method: "PUT" }
+      `https://api.trello.com/1/cards/${parent.card_id}/checkItem/${parent.trello_item_id}`,
+      
+      { method: "PUT" ,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ state: "complete" })
+      }
     );
   }
 }
