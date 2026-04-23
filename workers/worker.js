@@ -2,7 +2,9 @@ import dotenv from "dotenv";
 dotenv.config();
 import IORedis from "ioredis";
 
-const connection = new IORedis(ENV.redis);
+const connection = new IORedis(process.env.REDIS_URL, {
+  maxRetriesPerRequest: null,
+});
 
 
 import axios from "axios";
