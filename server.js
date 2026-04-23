@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { workflowQueue } from "./queue/queue.js";
+import { createJobWithSteps } from "./services/createJob.js";
 
 dotenv.config();
 
@@ -59,6 +60,16 @@ app.post("/webhook", async (req, res) => {
 
   } catch (err) {
     console.error("Webhook error:", err.message);
+  }
+});
+
+app.post("/create-job", async (req, res) => {
+  try {
+    const result = await createJobWithSteps(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("CREATE JOB ERROR:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
