@@ -1,8 +1,9 @@
-import axios from "axios";
 import dotenv from "dotenv";
 dotenv.config();
+import axios from "axios";
 import IORedis from "ioredis";
-const connection = new IORedis(process.env.REDIS_URL);
+const connection = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379");
+
 import { Worker } from "bullmq";
 
 import supabase from "../config/db.js";
