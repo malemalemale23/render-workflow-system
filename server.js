@@ -1,9 +1,10 @@
 import express from "express";
 import dotenv from "dotenv";
+dotenv.config();
+import IORedis from "ioredis";
+
 import { workflowQueue } from "./queue/queue.js";
 import { createJobWithSteps } from "./services/createJob.js";
-
-dotenv.config();
 
 const app = express();
 app.use(express.json());
