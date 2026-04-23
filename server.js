@@ -190,37 +190,54 @@ app.post("/webhook", async (req, res) => {
   }
 
 
-  // =======================================================
-  // 🔥 STEP 2: MOVE CARD BASED ON PROGRESS
+    // =======================================================
+  // 🔥 STEP 2: MOVE CARD (PARENT ONLY)
   // =======================================================
   try {
 
+    let parentStep = null;
+
+    // 👉 ถ้า click เป็น substep → หา parent
+    if (step.parent_id) {
+      const { data } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("id", step.parent_id)
+        .single();
+
+      parentStep = data;
+    } else {
+      // 👉 click เป็น parent เอง
+      parentStep = step;
+    }
+
+    if (!parentStep) return;
+
+    // 🔥 หา parent ทั้งหมด (เรียง order)
     const { data: parents } = await supabase
       .from("steps")
       .select("*")
-      .eq("card_id", cardId)
+      .eq("job_id", parentStep.job_id)
       .is("parent_id", null)
       .order("step_order", { ascending: true });
 
     if (!parents || parents.length === 0) return;
 
-    let lastDoneIndex = -1;
+    // 🔥 หา index ของ parent ปัจจุบัน
+    const currentIndex = parents.findIndex(p => p.id === parentStep.id);
+    if (currentIndex === -1) return;
 
-    for (let i = 0; i < parents.length; i++) {
-      if (parents[i].status === "done") {
-        lastDoneIndex = i;
-      } else {
-        break;
-      }
+    let targetIndex;
+
+    if (parentStep.status === "done") {
+      // 👉 forward
+      targetIndex = Math.min(currentIndex + 1, parents.length - 1);
+    } else {
+      // 👉 backward
+      targetIndex = currentIndex;
     }
 
-    const targetStep =
-      lastDoneIndex === -1
-        ? parents[0]
-        : lastDoneIndex < parents.length - 1
-        ? parents[lastDoneIndex + 1]
-        : parents[lastDoneIndex];
-
+    const targetStep = parents[targetIndex];
     if (!targetStep) return;
 
     const columnName = targetStep.name;
@@ -236,9 +253,12 @@ app.post("/webhook", async (req, res) => {
     }
 
     const target = cachedLists.find(l => l.name === columnName);
-    if (!target) return;
+    if (!target) {
+      console.log("❌ list not found:", columnName);
+      return;
+    }
 
-    console.log("MOVE →", columnName);
+    console.log("🚀 MOVE:", columnName);
 
     await axios.put(
       `https://api.trello.com/1/cards/${cardId}`,
@@ -255,6 +275,7 @@ app.post("/webhook", async (req, res) => {
   } catch (e) {
     console.error("MOVE FAIL:", e.message);
   }
+
 });
 
 
