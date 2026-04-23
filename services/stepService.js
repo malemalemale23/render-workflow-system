@@ -1,30 +1,21 @@
-import supabase from "../config/db.js";
-
-export async function createSteps(jobId, steps) {
+export async function createSteps(jobId, steps, cardId) {
   const results = [];
 
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
 
-    const { data: parent, error } = await supabase
+    const { data: parent } = await supabase
       .from("steps")
       .insert({
         job_id: jobId,
+        card_id: cardId, // 🔥 เพิ่ม
         name: step.name,
         step_order: i + 1,
         status: "pending",
+        trello_list_id: step.trello_list_id // 🔥 เพิ่ม
       })
       .select()
       .single();
-
-    if (error) {
-      console.error("STEP INSERT ERROR:", error);
-      throw error;
-    }
-
-    if (!parent) {
-      throw new Error("Parent step insert failed");
-    }
 
     results.push(parent);
 
@@ -34,6 +25,7 @@ export async function createSteps(jobId, steps) {
 
         await supabase.from("steps").insert({
           job_id: jobId,
+          card_id: cardId, // 🔥 เพิ่ม
           parent_id: parent.id,
           name: sub.name,
           step_order: j + 1,

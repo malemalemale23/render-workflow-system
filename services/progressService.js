@@ -1,7 +1,10 @@
+import axios from "axios";
 import supabase from "../config/db.js";
 
+const key = process.env.TRELLO_KEY;
+const token = process.env.TRELLO_TOKEN;
+
 export async function updateProgress(itemId) {
-  // หา step
   const { data: step } = await supabase
     .from("steps")
     .select("*")
@@ -10,7 +13,6 @@ export async function updateProgress(itemId) {
 
   if (!step || !step.parent_id) return;
 
-  // หา substeps ทั้งหมด
   const { data: subs } = await supabase
     .from("steps")
     .select("*")
@@ -23,13 +25,12 @@ export async function updateProgress(itemId) {
 
   console.log("PROGRESS:", progress);
 
-  // update parent
   await supabase
     .from("steps")
     .update({ progress })
     .eq("id", step.parent_id);
 
-
+  // 🔥 auto check parent
   if (progress === 1) {
     const { data: parent } = await supabase
       .from("steps")
@@ -37,12 +38,17 @@ export async function updateProgress(itemId) {
       .eq("id", step.parent_id)
       .single();
 
-    await fetch(
+    if (!parent?.card_id || !parent?.trello_item_id) return;
+
+    await axios.put(
       `https://api.trello.com/1/cards/${parent.card_id}/checkItem/${parent.trello_item_id}`,
-      
-      { method: "PUT" ,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ state: "complete" })
+      null,
+      {
+        params: {
+          state: "complete",
+          key,
+          token
+        }
       }
     );
   }

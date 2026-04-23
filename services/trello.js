@@ -23,5 +23,7 @@ export async function addChecklistItem(checklistId, name) {
     null,
     { params: { key, token, name } }
   );
-  return res.data;
+
+  return res.data; // 👉 มี item.id
 }
+
