@@ -1,5 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config();
+console.log("REDIS_URL =>", process.env.REDIS_URL);
+
 import axios from "axios";
 import IORedis from "ioredis";
 const connection = new IORedis(process.env.REDIS_URL || "redis://127.0.0.1:6379");
