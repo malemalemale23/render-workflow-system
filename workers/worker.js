@@ -1,22 +1,21 @@
 import axios from "axios";
-import dotenv from "dotenv";
-dotenv.config();
-console.log("REDIS_URL =", process.env.REDIS_URL);
-
 import IORedis from "ioredis";
-const connection = new IORedis(process.env.REDIS_URL);
+import dotenv from "dotenv";
+import { Worker } from "bullmq";
 
 import supabase from "../config/db.js";
-import { Worker } from "bullmq";
 import { updateProgress } from "../services/progressService.js";
 
+dotenv.config();
 
-
+const connection = new IORedis(process.env.REDIS_URL);
 
 const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;
 
-// ===== helper =====
+// =========================
+// Trello helpers
+// =========================
 async function revert(cardId, itemId, state) {
   await axios.put(
     `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
@@ -25,38 +24,24 @@ async function revert(cardId, itemId, state) {
   );
 }
 
-// ===== move using list_id =====
 async function moveCard(cardId, targetListId) {
-
-  // 🔥 check current list ก่อน
   const { data: card } = await axios.get(
     `https://api.trello.com/1/cards/${cardId}`,
     { params: { fields: "idList", key, token } }
   );
 
-  if (card.idList === targetListId) {
-    console.log("⏭ skip move (same list)");
-    return;
-  }
-
-  console.log("🚀 MOVE to:", targetListId);
+  if (card.idList === targetListId) return;
 
   await axios.put(
     `https://api.trello.com/1/cards/${cardId}`,
     null,
-    {
-      params: {
-        idList: targetListId,
-        key,
-        token
-      }
-    }
+    { params: { idList: targetListId, key, token } }
   );
 }
 
-// =======================================================
-// 🔥 WORKER
-// =======================================================
+// =========================
+// WORKER
+// =========================
 const worker = new Worker(
   "workflow",
   async (job) => {
@@ -64,62 +49,55 @@ const worker = new Worker(
 
     console.log("🔥 JOB:", cardId, itemId, state);
 
-    // =======================================================
+    // =========================
     // 1. LOAD STEP
-    // =======================================================
-    let step = await supabase
+    // =========================
+    const { data: step, error } = await supabase
       .from("steps")
       .select("*")
       .eq("trello_item_id", itemId)
-      .maybeSingle();
+      .single();
 
-    if (!step) return;
+    if (error || !step) return;
 
-    // =======================================================
-    // 2. LOAD ALL STEPS (ครั้งเดียว)
-    // =======================================================
-    const { data: allSteps } = await supabase
+    const isComplete = state === "complete";
+
+    // =========================
+    // 2. UPDATE CURRENT STEP
+    // =========================
+    await supabase
       .from("steps")
-      .select("*")
-      .eq("job_id", step.job_id);
+      .update({
+        status: isComplete ? "done" : "pending"
+      })
+      .eq("id", step.id);
 
-    if (!allSteps) return;
+    // =========================
+    // 3. SUBSTEP LOGIC
+    // =========================
+    let parentStep = null;
 
-    // =======================================================
-    // 3. BUILD MEMORY
-    // =======================================================
-    const parents = allSteps
-      .filter(s => !s.parent_id)
-      .sort((a, b) => a.step_order - b.step_order);
-
-    const subMap = {};
-    for (const s of allSteps) {
-      if (s.parent_id) {
-        if (!subMap[s.parent_id]) subMap[s.parent_id] = [];
-        subMap[s.parent_id].push(s);
-      }
-    }
-
-    const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
-
-    // =======================================================
-    // 🔹 SUBSTEP
-    // =======================================================
     if (step.parent_id) {
-
-      await supabase
+      // load parent
+      const { data: parent } = await supabase
         .from("steps")
-        .update({
-          status: state === "complete" ? "done" : "pending"
-        })
-        .eq("id", step.id);
+        .select("*")
+        .eq("id", step.parent_id)
+        .single();
 
-      const subs = subMap[step.parent_id] || [];
-      const allDone = subs.every(s => s.status === "done");
-
-      const parent = parents.find(p => p.id === step.parent_id);
       if (!parent) return;
 
+      parentStep = parent;
+
+      // load ALL substeps fresh (IMPORTANT)
+      const { data: subs } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("parent_id", parent.id);
+
+      const allDone = subs.every(s => s.status === "done");
+
+      // update parent
       await supabase
         .from("steps")
         .update({
@@ -127,77 +105,82 @@ const worker = new Worker(
         })
         .eq("id", parent.id);
 
+      // sync trello parent checkbox
       await revert(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
-      if (!allDone && parent.status !== "done") return;
-
-      step = parent; // 👉 ใช้ parent ต่อ
+    } else {
+      parentStep = step;
     }
 
-    // =======================================================
-    // 🔹 PARENT LOGIC
-    // =======================================================
-    const currentIndex = parents.findIndex(p => p.id === step.id);
+    // =========================
+    // 4. LOAD ALL PARENTS (ORDER)
+    // =========================
+    const { data: allSteps } = await supabase
+      .from("steps")
+      .select("*")
+      .eq("job_id", parentStep.job_id);
 
-    const subs = subMap[step.id] || [];
-    const hasSub = subs.length > 0;
+    const parents = allSteps
+      .filter(s => !s.parent_id)
+      .sort((a, b) => a.step_order - b.step_order);
 
-    if (hasSub && state === "complete") {
-      console.log("❌ BLOCK parent");
+    const index = parents.findIndex(p => p.id === parentStep.id);
+    if (index === -1) return;
+
+    // =========================
+    // 5. RULE ENGINE (STRICT)
+    // =========================
+
+    const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
+
+    const hasSub = allSteps.some(
+      s => s.parent_id === parentStep.id
+    );
+
+    // ❌ block parent check if has substeps
+    if (!step.parent_id && hasSub && isComplete) {
       await revert(cardId, itemId, "incomplete");
       return;
     }
 
-    // enforce latest
-    if (state === "complete" && currentIndex !== lastDoneIndex + 1) {
+    // ❌ enforce sequential forward
+    if (isComplete && index !== lastDoneIndex + 1) {
       await revert(cardId, itemId, "incomplete");
       return;
     }
 
-    if (state === "incomplete" && currentIndex !== lastDoneIndex) {
+    // ❌ enforce sequential backward
+    if (!isComplete && index !== lastDoneIndex) {
       await revert(cardId, itemId, "complete");
       return;
     }
 
-    await supabase
-      .from("steps")
-      .update({
-        status: state === "complete" ? "done" : "pending"
-      })
-      .eq("id", step.id);
-
-    // =======================================================
-    // UPDATE PROGRESS
-    // =======================================================
+    // =========================
+    // 6. PROGRESS UPDATE
+    // =========================
     try {
       await updateProgress(itemId);
     } catch {}
 
-    // =======================================================
-    // MOVE CARD
-    // =======================================================
-    const index = parents.findIndex(p => p.id === step.id);
+    // =========================
+    // 7. MOVE CARD (DETERMINISTIC)
+    // =========================
+    const targetIndex = isComplete ? index + 1 : index - 1;
 
-    let targetIndex =
-      step.status === "done"
-        ? index + 1
-        : index - 1;
+    const clampedIndex = Math.max(
+      0,
+      Math.min(targetIndex, parents.length - 1)
+    );
 
-    targetIndex = Math.max(0, Math.min(targetIndex, parents.length - 1));
+    const target = parents[clampedIndex];
 
-    const targetStep = parents[targetIndex];
-    if (!targetStep) return;
+    if (!target?.trello_list_id) return;
 
-    if (!targetStep.trello_list_id) {
-      console.log("❌ missing trello_list_id");
-      return;
-    }
-
-    await moveCard(cardId, targetStep.trello_list_id);
+    await moveCard(cardId, target.trello_list_id);
   },
   {
     connection,
@@ -205,6 +188,7 @@ const worker = new Worker(
   }
 );
 
+// =========================
 worker.on("completed", job => {
   console.log("✅ done:", job.id);
 });
