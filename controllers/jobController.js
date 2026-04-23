@@ -42,43 +42,49 @@ export async function createJob(req, res) {
 
     // 5. create checklist items
     for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
+    const step = steps[i];
+    const parentDb = parentSteps[i];
 
-      const parentItem = await addChecklistItem(
-        checklist.id,
-        formatStep(step, i + 1)
-      );
+    const parentItem = await addChecklistItem(
+      checklist.id,
+      formatStep(step, i + 1)
+    );
 
-      // save mapping
-      await supabase
-        .from("steps")
-        .update({ 
-          trello_item_id: parentItem.id,
-          card_id: card.id
-        })
-        .eq("job_id", job.id)
-        .eq("step_order", i + 1)
-        .is("parent_id", null);
+    // ✅ map parent
+    await supabase
+      .from("steps")
+      .update({ 
+        trello_item_id: parentItem.id,
+        card_id: card.id
+      })
+      .eq("job_id", job.id)
+      .eq("step_order", i + 1)
+      .is("parent_id", null);
 
-      if (step.substeps) {
-        for (let j = 0; j < step.substeps.length; j++) {
-          const sub = step.substeps[j];
+    // ============================
+    // 🔥 SUBSTEP
+    // ============================
+    if (step.substeps) {
+      for (let j = 0; j < step.substeps.length; j++) {
+        const sub = step.substeps[j];
 
-          const subItem = await addChecklistItem(
-            checklist.id,
-            formatStep(sub, i + 1, j + 1)
-          );
+        const subItem = await addChecklistItem(
+          checklist.id,
+          formatStep(sub, i + 1, j + 1)
+        );
 
         await supabase
           .from("steps")
-          .update({ trello_item_id: subItem.id, card_id: card.id })
+          .update({
+            trello_item_id: subItem.id,
+            card_id: card.id
+          })
           .eq("job_id", job.id)
-          .eq("parent_id", parentSteps[i].id)
+          .eq("parent_id", parentDb.id)
           .eq("step_order", j + 1);
-
-        }
       }
     }
+  }
 
     res.json({ success: true, job });
   } catch (err) {
