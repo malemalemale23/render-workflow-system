@@ -1,8 +1,8 @@
-
-
 import axios from "axios";
 import dotenv from "dotenv";
 dotenv.config();
+console.log("REDIS_URL =", process.env.REDIS_URL);
+
 import IORedis from "ioredis";
 
 import supabase from "../config/db.js";
@@ -66,7 +66,7 @@ const worker = new Worker(
     // =======================================================
     // 1. LOAD STEP
     // =======================================================
-    const { data: step } = await supabase
+    let step = await supabase
       .from("steps")
       .select("*")
       .eq("trello_item_id", itemId)
