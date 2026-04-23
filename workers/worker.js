@@ -4,13 +4,14 @@ dotenv.config();
 console.log("REDIS_URL =", process.env.REDIS_URL);
 
 import IORedis from "ioredis";
+const connection = new IORedis(process.env.REDIS_URL);
 
 import supabase from "../config/db.js";
 import { Worker } from "bullmq";
 import { updateProgress } from "../services/progressService.js";
 
 
-const connection = new IORedis(process.env.REDIS_URL);
+
 
 const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;

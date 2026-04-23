@@ -5,7 +5,7 @@ import IORedis from "ioredis";
 
 import { workflowQueue } from "./queue/queue.js";
 import { createJobWithSteps } from "./services/createJob.js";
-console.log("REDIS_URL =", process.env.REDIS_URL);
+
 
 const app = express();
 app.use(express.json());
