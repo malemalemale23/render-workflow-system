@@ -30,26 +30,33 @@ export async function updateProgress(itemId) {
     .update({ progress })
     .eq("id", step.parent_id);
 
-  // 🔥 auto check parent
-  if (progress === 1) {
+  // 🔥 auto check parent (safe)
+  if (done === total && total > 0) {
     const { data: parent } = await supabase
       .from("steps")
-      .select("trello_item_id, card_id")
+      .select("trello_item_id, card_id, status")
       .eq("id", step.parent_id)
       .single();
 
     if (!parent?.card_id || !parent?.trello_item_id) return;
 
-    await axios.put(
-      `https://api.trello.com/1/cards/${parent.card_id}/checkItem/${parent.trello_item_id}`,
-      null,
-      {
-        params: {
-          state: "complete",
-          key,
-          token
+    // 🔥 กัน loop
+    if (parent.status === "done") return;
+
+    try {
+      await axios.put(
+        `https://api.trello.com/1/cards/${parent.card_id}/checkItem/${parent.trello_item_id}`,
+        null,
+        {
+          params: {
+            state: "complete",
+            key,
+            token
+          }
         }
-      }
-    );
+      );
+    } catch (err) {
+      console.error("TRELLO UPDATE FAIL:", err.response?.data || err.message);
+    }
   }
 }
