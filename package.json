@@ -4,7 +4,7 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "concurrently \"node server.js\" \"node workers/worker.js\"",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -18,5 +18,8 @@
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
     "ioredis": "^5.10.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
   }
 }

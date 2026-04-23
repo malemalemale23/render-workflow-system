@@ -1,4 +1,6 @@
-import { ENV } from "../config/env.js";
+import dotenv from "dotenv";
+dotenv.config();
+import IORedis from "ioredis";
 
 const connection = new IORedis(ENV.redis);
 
