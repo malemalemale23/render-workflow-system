@@ -1,7 +1,9 @@
-import dotenv from "dotenv";
-dotenv.config();
+import { ENV } from "../config/env.js";
+
+const connection = new IORedis(ENV.redis);
+
 import express from "express";
-import IORedis from "ioredis";
+
 
 import { workflowQueue } from "./queue/queue.js";
 import { createJobWithSteps } from "./services/createJob.js";

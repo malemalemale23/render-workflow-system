@@ -1,14 +1,9 @@
-import dotenv from "dotenv";
-dotenv.config();
-console.log("ENV CHECK:", {
-  redis: process.env.REDIS_URL,
-});
+import { ENV } from "../config/env.js";
+
+const connection = new IORedis(ENV.redis);
+
 
 import axios from "axios";
-import IORedis from "ioredis";
-const connection = new IORedis(process.env.REDIS_URL, {
-  maxRetriesPerRequest: null,
-});
 
 import { Worker } from "bullmq";
 
