@@ -1,12 +1,13 @@
 import axios from "axios";
-import IORedis from "ioredis";
 import dotenv from "dotenv";
+dotenv.config();
+import IORedis from "ioredis";
 import { Worker } from "bullmq";
 
 import supabase from "../config/db.js";
 import { updateProgress } from "../services/progressService.js";
 
-dotenv.config();
+
 
 const connection = new IORedis(process.env.REDIS_URL);
 
