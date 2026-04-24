@@ -8,35 +8,38 @@ export async function createJobWithSteps(body) {
     throw new Error("missing required fields");
   }
 
-  console.log("🔥 CREATE JOB START");
-
-  // 1. create card
+  // ===================================================
+  // 1. CREATE CARD
+  // ===================================================
   const card = await createCard(name, listId);
-  console.log("✅ card:", card.id);
 
-  // 2. create job
+  // ===================================================
+  // 2. CREATE JOB
+  // ===================================================
   const { data: jobRow, error: jobError } = await supabase
     .from("jobs")
     .insert({
       po_number: job.po_number,
-      customer: job.customer,
+      customer: job.customer
     })
     .select()
     .single();
 
   if (jobError) throw jobError;
 
-  // 3. checklist
+  // ===================================================
+  // 3. CREATE CHECKLIST
+  // ===================================================
   const checklist = await createChecklist(card.id, "Workflow");
-  console.log("✅ checklist:", checklist.id);
 
-  // 4. steps
+  // ===================================================
+  // 4. CREATE STEPS
+  // ===================================================
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
 
-    console.log("👉 parent:", step.name);
-
-    const { data: parent, error: parentErr } = await supabase
+    // 🔥 parent DB
+    const { data: parent } = await supabase
       .from("steps")
       .insert({
         job_id: jobRow.id,
@@ -44,37 +47,33 @@ export async function createJobWithSteps(body) {
         name: step.name,
         step_order: i + 1,
         status: "pending",
-        trello_list_id: step.trello_list_id,
+        trello_list_id: step.trello_list_id
       })
       .select()
       .single();
 
-    if (parentErr) throw parentErr;
-
-    const parentItem = await addChecklistItem(checklist.id, step.name);
-
-    if (!parentItem?.id) {
-      throw new Error("❌ parentItem create fail");
-    }
+    // 🔥 parent checklist
+    const parentItem = await addChecklistItem(
+      checklist.id,
+      step.name
+    );
 
     await supabase
       .from("steps")
       .update({ trello_item_id: parentItem.id })
       .eq("id", parent.id);
 
-    // ===============================
-    // 🔥 SUBSTEP (FIX จริง)
-    // ===============================
-    if (step.substeps && step.substeps.length > 0) {
-      console.log("   🔽 substeps found:", step.substeps.length);
-
+    // 🔥 substeps
+    if (step.substeps) {
       for (let j = 0; j < step.substeps.length; j++) {
         const sub = step.substeps[j];
 
-        console.log("   👉 sub:", sub.name);
+        const subItem = await addChecklistItem(
+          checklist.id,
+          `- ${sub.name}`
+        );
 
-        // 1. DB
-        const { data: subRow, error: subErr } = await supabase
+        await supabase
           .from("steps")
           .insert({
             job_id: jobRow.id,
@@ -83,36 +82,15 @@ export async function createJobWithSteps(body) {
             name: sub.name,
             step_order: j + 1,
             status: "pending",
-          })
-          .select()
-          .single();
-
-        if (subErr) throw subErr;
-
-        // 2. Trello
-        const subItem = await addChecklistItem(
-          checklist.id,
-          `- ${sub.name}`
-        );
-
-        if (!subItem?.id) {
-          throw new Error("❌ subItem create fail");
-        }
-
-        // 3. map
-        await supabase
-          .from("steps")
-          .update({ trello_item_id: subItem.id })
-          .eq("id", subRow.id);
+            trello_item_id: subItem.id
+          });
       }
     }
   }
 
-  console.log("🔥 CREATE JOB DONE");
-
   return {
     success: true,
     cardId: card.id,
-    jobId: jobRow.id,
+    jobId: jobRow.id
   };
 }
