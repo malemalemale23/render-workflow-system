@@ -7,7 +7,7 @@ import supabase from "./config/db.js";
 
 const app = express();
 app.use(express.json());
-
+import { createJobWithSteps } from "./services/createJob.js";
 // =======================================================
 // 🔥 ENV
 // =======================================================
@@ -60,6 +60,16 @@ app.get("/", (_, res) => {
   res.send("Workflow running 🚀");
 });
 
+
+app.post("/create-job", async (req, res) => {
+  try {
+    const result = await createJobWithSteps(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("CREATE JOB ERROR:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 // =======================================================
 // 🔥 WEBHOOK
 // =======================================================
