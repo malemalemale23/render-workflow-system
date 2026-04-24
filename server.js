@@ -13,8 +13,8 @@ app.use(express.json());
 const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;
 
-// 🔥 กัน loop
-const cooldown = new Map();
+// 🔥 กัน loop webhook
+const lockSet = new Set();
 
 // =======================================================
 // BASIC
@@ -26,11 +26,7 @@ app.get("/", (_, res) => {
 // =======================================================
 // HELPERS
 // =======================================================
-async function revert(cardId, itemId, state) {
-  console.log("↩️ revert:", itemId, state);
-
-  cooldown.set(itemId, Date.now());
-
+async function trelloSetState(cardId, itemId, state) {
   await axios.put(
     `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
     null,
@@ -39,12 +35,12 @@ async function revert(cardId, itemId, state) {
 }
 
 async function moveCard(cardId, listId) {
-  const { data: card } = await axios.get(
+  const { data } = await axios.get(
     `https://api.trello.com/1/cards/${cardId}`,
     { params: { fields: "idList", key, token } }
   );
 
-  if (card.idList === listId) return;
+  if (data.idList === listId) return;
 
   console.log("🚀 MOVE →", listId);
 
@@ -63,7 +59,7 @@ app.post("/create-job", async (req, res) => {
     const result = await createJobWithSteps(req.body);
     res.json(result);
   } catch (err) {
-    console.error(err.message);
+    console.error("CREATE JOB ERROR:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -82,14 +78,11 @@ app.post("/webhook", async (req, res) => {
     const itemId = action.data.checkItem.id;
     const isComplete = action.data.checkItem.state === "complete";
 
-    // 🔥 กัน loop
-    if (cooldown.has(itemId)) {
-      const diff = Date.now() - cooldown.get(itemId);
-      if (diff < 500) {
-        console.log("🛑 ignore loop");
-        return;
-      }
-      cooldown.delete(itemId);
+    // 🔥 กัน loop จากการ revert
+    if (lockSet.has(itemId)) {
+      console.log("🛑 skip loop:", itemId);
+      lockSet.delete(itemId);
+      return;
     }
 
     console.log("📩", cardId, itemId, isComplete);
@@ -106,7 +99,7 @@ app.post("/webhook", async (req, res) => {
     if (!step) return;
 
     // ===================================================
-    // LOAD ALL
+    // LOAD ALL STEPS
     // ===================================================
     const { data: all } = await supabase
       .from("steps")
@@ -117,7 +110,7 @@ app.post("/webhook", async (req, res) => {
       .filter(s => !s.parent_id)
       .sort((a, b) => a.step_order - b.step_order);
 
-    const subs = (pid) => all.filter(s => s.parent_id === pid);
+    const getSubs = (pid) => all.filter(s => s.parent_id === pid);
 
     const parent = step.parent_id
       ? all.find(s => s.id === step.parent_id)
@@ -126,33 +119,37 @@ app.post("/webhook", async (req, res) => {
     const parentIndex = parents.findIndex(p => p.id === parent.id);
     const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
 
-    const hasSub = subs(parent.id).length > 0;
+    const subs = getSubs(parent.id);
+    const hasSub = subs.length > 0;
 
     // ===================================================
-    // RULE 1: parent มี sub → user check ไม่ได้
+    // ❌ RULE 1: parent มี sub → user check ไม่ได้
     // ===================================================
     if (!step.parent_id && hasSub && isComplete) {
-      await revert(cardId, itemId, "incomplete");
+      lockSet.add(itemId);
+      await trelloSetState(cardId, itemId, "incomplete");
       return;
     }
 
     // ===================================================
-    // RULE 2: order parent
+    // ❌ RULE 2: check ข้าม step
     // ===================================================
     if (!step.parent_id) {
       if (isComplete && parentIndex !== lastDoneIndex + 1) {
-        await revert(cardId, itemId, "incomplete");
+        lockSet.add(itemId);
+        await trelloSetState(cardId, itemId, "incomplete");
         return;
       }
 
       if (!isComplete && parentIndex !== lastDoneIndex) {
-        await revert(cardId, itemId, "complete");
+        lockSet.add(itemId);
+        await trelloSetState(cardId, itemId, "complete");
         return;
       }
     }
 
     // ===================================================
-    // UPDATE CURRENT
+    // UPDATE CURRENT STEP
     // ===================================================
     await supabase
       .from("steps")
@@ -162,14 +159,18 @@ app.post("/webhook", async (req, res) => {
       .eq("id", step.id);
 
     // ===================================================
-    // SUBSTEP LOGIC
+    // 🔥 SUBSTEP LOGIC
     // ===================================================
     if (step.parent_id) {
-      const subList = subs(parent.id);
+      // reload fresh
+      const { data: freshSubs } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("parent_id", parent.id);
 
-      const allDone = subList.every(s => s.status === "done");
+      const allDone = freshSubs.every(s => s.status === "done");
 
-      // update parent
+      // update parent status
       await supabase
         .from("steps")
         .update({
@@ -177,15 +178,20 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", parent.id);
 
-      // sync parent check
-      await revert(
+      // 🔥 auto sync parent checkbox
+      lockSet.add(parent.trello_item_id);
+
+      await trelloSetState(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
-      // 🔥 move card
-      const targetIndex = allDone ? parentIndex + 1 : parentIndex;
+      // 🔥 MOVE CARD
+      const targetIndex = allDone
+        ? parentIndex + 1
+        : parentIndex;
+
       const target = parents[targetIndex] || parents[parentIndex];
 
       if (target?.trello_list_id) {
@@ -197,7 +203,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // PARENT MOVE
+    // 🔥 PARENT MOVE
     // ===================================================
     const targetIndex = isComplete
       ? parentIndex + 1
