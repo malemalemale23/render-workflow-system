@@ -19,8 +19,8 @@ const token = process.env.TRELLO_TOKEN;
 const ignoreMap = new Map();
 const debounceMap = new Map();
 
-const IGNORE_TTL = 1500;
-const DEBOUNCE_MS = 300;
+const IGNORE_TTL = 1200;
+const DEBOUNCE_MS = 250;
 
 // =======================================================
 // 🔥 BASIC
@@ -52,25 +52,25 @@ async function revert(cardId, itemId, state) {
   );
 }
 
-async function moveCard(cardId, targetListId) {
+async function moveCard(cardId, listId) {
   const { data } = await axios.get(
     `https://api.trello.com/1/cards/${cardId}`,
     { params: { fields: "idList", key, token } }
   );
 
-  if (data.idList === targetListId) return;
+  if (data.idList === listId) return;
 
-  console.log("🚀 MOVE →", targetListId);
+  console.log("🚀 MOVE →", listId);
 
   await axios.put(
     `https://api.trello.com/1/cards/${cardId}`,
     null,
-    { params: { idList: targetListId, key, token } }
+    { params: { idList: listId, key, token } }
   );
 }
 
 // =======================================================
-// 🔥 WEBHOOK ENTRY (DEBOUNCE)
+// 🔥 WEBHOOK (DEBOUNCE)
 // =======================================================
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
@@ -80,7 +80,6 @@ app.post("/webhook", (req, res) => {
 
   const cardId = action.data.card.id;
 
-  // 🔥 debounce ต่อ card
   if (debounceMap.has(cardId)) {
     clearTimeout(debounceMap.get(cardId));
   }
@@ -103,7 +102,7 @@ async function processWebhook(body) {
     const state = action.data.checkItem.state;
     const isComplete = state === "complete";
 
-    // 🔥 loop guard
+    // 🔥 LOOP GUARD
     const last = ignoreMap.get(itemId);
     if (last && Date.now() - last < IGNORE_TTL) {
       console.log("🛑 ignore loop");
@@ -123,6 +122,19 @@ async function processWebhook(body) {
 
     if (!step) return;
 
+    // ===================================================
+    // 🔥 2. UPDATE STEP FIRST (สำคัญมาก)
+    // ===================================================
+    await supabase
+      .from("steps")
+      .update({
+        status: isComplete ? "done" : "pending",
+      })
+      .eq("id", step.id);
+
+    // ===================================================
+    // 🔥 3. RELOAD STATE (กัน stale)
+    // ===================================================
     const { data: all } = await supabase
       .from("steps")
       .select("*")
@@ -136,7 +148,7 @@ async function processWebhook(body) {
 
     const parent = step.parent_id
       ? all.find(x => x.id === step.parent_id)
-      : step;
+      : all.find(x => x.id === step.id);
 
     const parentIndex = parents.findIndex(p => p.id === parent.id);
     const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
@@ -145,7 +157,7 @@ async function processWebhook(body) {
     const hasSub = subs.length > 0;
 
     // ===================================================
-    // 🔥 RULE 1: parent with sub → block
+    // 🔥 RULE 1: parent มี sub ห้าม user check
     // ===================================================
     if (!step.parent_id && hasSub && isComplete) {
       await revert(cardId, itemId, "incomplete");
@@ -153,30 +165,23 @@ async function processWebhook(body) {
     }
 
     // ===================================================
-    // 🔥 RULE 2: forward skip
+    // 🔥 RULE 2: forward ต้องเรียง
     // ===================================================
-    if (!step.parent_id && isComplete && parentIndex !== lastDoneIndex + 1) {
-      await revert(cardId, itemId, "incomplete");
-      return;
+    if (!step.parent_id && isComplete && parentIndex !== lastDoneIndex) {
+      // ต้อง check ตัวถัดไปเท่านั้น
+      if (parentIndex !== lastDoneIndex + 1) {
+        await revert(cardId, itemId, "incomplete");
+        return;
+      }
     }
 
     // ===================================================
-    // 🔥 RULE 3: backward skip
+    // 🔥 RULE 3: backward ต้อง uncheck ล่าสุด
     // ===================================================
     if (!step.parent_id && !isComplete && parentIndex !== lastDoneIndex) {
       await revert(cardId, itemId, "complete");
       return;
     }
-
-    // ===================================================
-    // 2. UPDATE STEP
-    // ===================================================
-    await supabase
-      .from("steps")
-      .update({
-        status: isComplete ? "done" : "pending",
-      })
-      .eq("id", step.id);
 
     // ===================================================
     // 🔥 SUBSTEP LOGIC
@@ -185,7 +190,7 @@ async function processWebhook(body) {
       const freshSubs = getSubs(parent.id);
       const allDone = freshSubs.every(s => s.status === "done");
 
-      // sync parent
+      // update parent
       await supabase
         .from("steps")
         .update({
@@ -193,13 +198,14 @@ async function processWebhook(body) {
         })
         .eq("id", parent.id);
 
+      // sync trello
       await revert(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
-      // 🔥 MOVE BASED ON PARENT
+      // 🔥 MOVE
       const target = allDone
         ? parents[parentIndex + 1]
         : parents[parentIndex];
@@ -213,7 +219,7 @@ async function processWebhook(body) {
     }
 
     // ===================================================
-    // 🔥 PARENT MOVE
+    // 🔥 MOVE CARD (parent only)
     // ===================================================
     const target = isComplete
       ? parents[parentIndex + 1]
