@@ -10,24 +10,27 @@ import { createJobWithSteps } from "./services/createJob.js";
 const app = express();
 app.use(express.json());
 
+// =======================================================
+// 🔥 CONFIG
+// =======================================================
 const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;
 
 // =======================================================
-// 🔥 ANTI LOOP (สำคัญมาก)
+// 🔥 ANTI LOOP (สำคัญสุด)
 // =======================================================
-const recentActions = new Map();
+const recent = new Map();
 
 function isDuplicate(cardId, itemId, state) {
-  const key = `${cardId}-${itemId}`;
-  const last = recentActions.get(key);
+  const k = `${cardId}-${itemId}`;
   const now = Date.now();
+  const last = recent.get(k);
 
-  if (last && last.state === state && now - last.time < 800) {
+  if (last && last.state === state && now - last.time < 1000) {
     return true;
   }
 
-  recentActions.set(key, { state, time: now });
+  recent.set(k, { state, time: now });
   return false;
 }
 
@@ -35,6 +38,8 @@ function isDuplicate(cardId, itemId, state) {
 // 🔥 HELPERS
 // =======================================================
 async function safeRevert(cardId, itemId, desiredState) {
+  await new Promise(r => setTimeout(r, 150)); // ให้ Trello sync ก่อน
+
   const { data } = await axios.get(
     `https://api.trello.com/1/cards/${cardId}/checklists`,
     { params: { key, token } }
@@ -46,7 +51,12 @@ async function safeRevert(cardId, itemId, desiredState) {
 
   if (!item) return;
 
-  if (item.state === desiredState) return; // 🔥 กัน loop
+  if (item.state === desiredState) {
+    console.log("⏭ skip revert");
+    return;
+  }
+
+  console.log("↩️ revert:", itemId, desiredState);
 
   await axios.put(
     `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
@@ -61,7 +71,10 @@ async function moveCard(cardId, targetListId) {
     { params: { fields: "idList", key, token } }
   );
 
-  if (card.idList === targetListId) return;
+  if (card.idList === targetListId) {
+    console.log("⏭ skip move");
+    return;
+  }
 
   console.log("🚀 MOVE →", targetListId);
 
@@ -102,9 +115,8 @@ app.post("/webhook", async (req, res) => {
     const state = action.data.checkItem.state;
     const isComplete = state === "complete";
 
-    // 🔥 กัน loop
     if (isDuplicate(cardId, itemId, state)) {
-      console.log("🛑 skip duplicate");
+      console.log("🛑 duplicate skip");
       return;
     }
 
@@ -142,29 +154,33 @@ app.post("/webhook", async (req, res) => {
     const parentIndex = parents.findIndex(p => p.id === parent.id);
     const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
 
-    const hasSub = getSubs(parent.id).length > 0;
+    const subs = getSubs(parent.id);
+    const hasSub = subs.length > 0;
 
     // ===================================================
     // 🔥 VALIDATION
     // ===================================================
 
+    // ❌ parent มี sub → user ห้าม check
     if (!step.parent_id && hasSub && isComplete) {
       await safeRevert(cardId, itemId, "incomplete");
       return;
     }
 
+    // ❌ forward skip
     if (isComplete && parentIndex !== lastDoneIndex + 1) {
       await safeRevert(cardId, itemId, "incomplete");
       return;
     }
 
+    // ❌ backward skip
     if (!isComplete && parentIndex !== lastDoneIndex) {
       await safeRevert(cardId, itemId, "complete");
       return;
     }
 
     // ===================================================
-    // UPDATE STEP
+    // UPDATE CURRENT STEP
     // ===================================================
     await supabase
       .from("steps")
@@ -174,15 +190,18 @@ app.post("/webhook", async (req, res) => {
       .eq("id", step.id);
 
     // ===================================================
-    // SUBSTEP LOGIC
+    // 🔥 SUBSTEP FLOW
     // ===================================================
     if (step.parent_id) {
-      const subs = getSubs(parent.id);
-
-      const allDone = subs.every(s =>
-        s.id === step.id ? isComplete : s.status === "done"
+      const updatedSubs = subs.map(s =>
+        s.id === step.id
+          ? { ...s, status: isComplete ? "done" : "pending" }
+          : s
       );
 
+      const allDone = updatedSubs.every(s => s.status === "done");
+
+      // update parent
       await supabase
         .from("steps")
         .update({
@@ -190,13 +209,18 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", parent.id);
 
+      // sync parent check
       await safeRevert(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
-      const targetIndex = allDone ? parentIndex + 1 : parentIndex;
+      // 🔥 MOVE
+      const targetIndex = allDone
+        ? parentIndex + 1
+        : parentIndex;
+
       const target = parents[targetIndex] || parents[parentIndex];
 
       if (target?.trello_list_id) {
@@ -208,9 +232,12 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // MOVE CARD (parent)
+    // 🔥 PARENT MOVE
     // ===================================================
-    const targetIndex = isComplete ? parentIndex + 1 : parentIndex;
+    const targetIndex = isComplete
+      ? parentIndex + 1
+      : parentIndex;
+
     const target = parents[targetIndex] || parents[parentIndex];
 
     if (target?.trello_list_id) {
