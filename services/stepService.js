@@ -72,7 +72,7 @@ export async function createJobWithSteps(body) {
         // 🔥 สำคัญ: create Trello item
         const subItem = await addChecklistItem(
           checklist.id,
-          `- ${sub.name}`
+          `(${sub.name})`
         );
 
         await supabase
