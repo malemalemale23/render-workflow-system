@@ -70,7 +70,7 @@ export async function createJobWithSteps(body) {
 
         const subItem = await addChecklistItem(
           checklist.id,
-          `- ${sub.name}`
+          `(${sub.name})`
         );
 
         await supabase
