@@ -78,7 +78,7 @@ app.post("/webhook", async (req, res) => {
     const itemId = action.data.checkItem.id;
     const isComplete = action.data.checkItem.state === "complete";
 
-    // 🔥 กัน loop จากการ revert
+    // 🔥 loop guard
     if (lockSet.has(itemId)) {
       console.log("🛑 skip loop:", itemId);
       lockSet.delete(itemId);
@@ -98,9 +98,6 @@ app.post("/webhook", async (req, res) => {
 
     if (!step) return;
 
-    // ===================================================
-    // LOAD ALL STEPS
-    // ===================================================
     const { data: all } = await supabase
       .from("steps")
       .select("*")
@@ -123,7 +120,16 @@ app.post("/webhook", async (req, res) => {
     const hasSub = subs.length > 0;
 
     // ===================================================
-    // ❌ RULE 1: parent มี sub → user check ไม่ได้
+    // ❌ NEW RULE: ห้าม check substep ถ้ายังไม่ถึง parent
+    // ===================================================
+    if (step.parent_id && parentIndex !== lastDoneIndex + 1) {
+      lockSet.add(itemId);
+      await trelloSetState(cardId, itemId, "incomplete");
+      return;
+    }
+
+    // ===================================================
+    // ❌ parent มี sub → user check ไม่ได้
     // ===================================================
     if (!step.parent_id && hasSub && isComplete) {
       lockSet.add(itemId);
@@ -132,7 +138,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // ❌ RULE 2: check ข้าม step
+    // ❌ parent order
     // ===================================================
     if (!step.parent_id) {
       if (isComplete && parentIndex !== lastDoneIndex + 1) {
@@ -149,7 +155,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // UPDATE CURRENT STEP
+    // UPDATE CURRENT
     // ===================================================
     await supabase
       .from("steps")
@@ -159,7 +165,7 @@ app.post("/webhook", async (req, res) => {
       .eq("id", step.id);
 
     // ===================================================
-    // 🔥 SUBSTEP LOGIC
+    // 🔥 SUBSTEP LOGIC (FIX ครบ)
     // ===================================================
     if (step.parent_id) {
       // reload fresh
@@ -170,7 +176,7 @@ app.post("/webhook", async (req, res) => {
 
       const allDone = freshSubs.every(s => s.status === "done");
 
-      // update parent status
+      // update parent
       await supabase
         .from("steps")
         .update({
@@ -178,7 +184,7 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", parent.id);
 
-      // 🔥 auto sync parent checkbox
+      // 🔥 FORCE SYNC parent checkbox
       lockSet.add(parent.trello_item_id);
 
       await trelloSetState(
@@ -187,7 +193,9 @@ app.post("/webhook", async (req, res) => {
         allDone ? "complete" : "incomplete"
       );
 
-      // 🔥 MOVE CARD
+      // ===================================================
+      // 🔥 MOVE CARD (สำคัญ)
+      // ===================================================
       const targetIndex = allDone
         ? parentIndex + 1
         : parentIndex;
@@ -221,6 +229,7 @@ app.post("/webhook", async (req, res) => {
     console.error("WEBHOOK ERROR:", err.message);
   }
 });
+
 
 // =======================================================
 app.listen(process.env.PORT || 3000, () => {
