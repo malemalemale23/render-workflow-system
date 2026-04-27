@@ -341,7 +341,7 @@ export async function createJobWithSteps(body) {
             name: sub.name,
             step_order: j + 1,
             status: "pending",
-            trello_item_id: subItem.id
+            trello_item_id: parent.trello_list_id
           });
       }
     }
