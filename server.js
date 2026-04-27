@@ -12,30 +12,43 @@ const key = process.env.TRELLO_KEY;
 const token = process.env.TRELLO_TOKEN;
 
 // =======================================================
-// 🔥 LOOP GUARD (กัน webhook ยิงซ้ำจาก revert)
+// 🔥 LOOP GUARD (สำคัญมาก)
 // =======================================================
 const ignoreMap = new Map();
 
-function shouldIgnore(itemId) {
-  const t = ignoreMap.get(itemId);
+function markIgnore(id) {
+  ignoreMap.set(id, Date.now() + 800);
+}
+
+function shouldIgnore(id) {
+  const t = ignoreMap.get(id);
   if (!t) return false;
   if (Date.now() > t) {
-    ignoreMap.delete(itemId);
+    ignoreMap.delete(id);
     return false;
   }
   return true;
 }
 
-function markIgnore(itemId) {
-  ignoreMap.set(itemId, Date.now() + 500);
-}
-
 // =======================================================
 // 🔥 HELPERS
 // =======================================================
+
+// ❌ สำหรับ error only
 async function revert(cardId, itemId, state) {
   console.log("↩️ revert:", itemId, state);
+  markIgnore(itemId);
 
+  await axios.put(
+    `https://api.trello.com/1/cards/${cardId}/checkItem/${itemId}`,
+    null,
+    { params: { state, key, token } }
+  );
+}
+
+// ✅ สำหรับ auto logic
+async function syncCheck(cardId, itemId, state) {
+  console.log("🔁 sync:", itemId, state);
   markIgnore(itemId);
 
   await axios.put(
@@ -129,14 +142,13 @@ app.post("/webhook", async (req, res) => {
       : step;
 
     const parentIndex = parents.findIndex(p => p.id === parent.id);
-
     const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
 
     const subs = getSubs(parent.id);
     const hasSub = subs.length > 0;
 
     // ===================================================
-    // ❌ BLOCK: check substep ก่อนถึง step
+    // ❌ BLOCK: substep ก่อนถึง step
     // ===================================================
     if (step.parent_id && parentIndex !== lastDoneIndex + 1) {
       await revert(cardId, itemId, "incomplete");
@@ -144,7 +156,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // ❌ BLOCK: user check parent ที่มี substep
+    // ❌ BLOCK: parent ที่มี substep
     // ===================================================
     if (!step.parent_id && hasSub && isComplete) {
       await revert(cardId, itemId, "incomplete");
@@ -152,7 +164,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // ❌ BLOCK: forward skip
+    // ❌ BLOCK: skip forward
     // ===================================================
     if (!step.parent_id && isComplete && parentIndex !== lastDoneIndex + 1) {
       await revert(cardId, itemId, "incomplete");
@@ -160,7 +172,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // ❌ BLOCK: backward skip
+    // ❌ BLOCK: skip backward
     // ===================================================
     if (!step.parent_id && !isComplete && parentIndex !== lastDoneIndex) {
       await revert(cardId, itemId, "complete");
@@ -178,17 +190,16 @@ app.post("/webhook", async (req, res) => {
       .eq("id", step.id);
 
     // ===================================================
-    // 🔥 SUBSTEP LOGIC
+    // 🔥 SUBSTEP LOGIC (FIXED)
     // ===================================================
     if (step.parent_id) {
-      const updatedSubs = await supabase
+      const { data: updatedSubs } = await supabase
         .from("steps")
         .select("*")
         .eq("parent_id", parent.id);
 
-      const allDone = updatedSubs.data.every(s => s.status === "done");
+      const allDone = updatedSubs.every(s => s.status === "done");
 
-      // ✅ auto check / uncheck parent
       await supabase
         .from("steps")
         .update({
@@ -196,13 +207,13 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", parent.id);
 
-      await revert(
+      // ✅ IMPORTANT: use syncCheck (ไม่ใช่ revert)
+      await syncCheck(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
-      // 👉 move
       const targetIndex = allDone
         ? parentIndex + 1
         : parentIndex;
@@ -217,7 +228,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ===================================================
-    // 🔥 NORMAL PARENT MOVE
+    // 🔥 NORMAL MOVE
     // ===================================================
     const targetIndex = isComplete
       ? parentIndex + 1
