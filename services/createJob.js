@@ -51,7 +51,7 @@ export async function createJobWithSteps(body) {
         name: step.name,
         step_order: i + 1,
         status: "pending",
-        trello_list_id: step.trello_list_id
+        trello_list_id: parent.trello_list_id
       })
       .select()
       .single();
@@ -85,7 +85,8 @@ export async function createJobWithSteps(body) {
             parent_id: parent.id,
             name: sub.name,
             step_order: j + 1,
-            status: "pending"
+            status: "pending",
+            trello_list_id: parent.trello_list_id
           })
           .select()
           .single();
