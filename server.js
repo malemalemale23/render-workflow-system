@@ -4,6 +4,7 @@ dotenv.config();
 import express from "express";
 import axios from "axios";
 import supabase from "./config/db.js";
+import { createJobWithSteps } from "./services/createJob.js";
 
 const app = express();
 app.use(express.json());
@@ -14,8 +15,19 @@ const token = process.env.TRELLO_TOKEN;
 // ================= LOOP GUARD =================
 const ignore = new Map();
 
+// ================= CREATE JOB =================
+app.post("/create-job", async (req, res) => {
+  try {
+    const result = await createJobWithSteps(req.body);
+    res.json(result);
+  } catch (err) {
+    console.error("CREATE JOB ERROR:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 function mark(id) {
-  ignore.set(id, Date.now() + 600);
+  ignore.set(id, Date.now() + 1500); // 🔥 เพิ่มเป็น 1.5s
 }
 
 function blocked(id) {
@@ -81,13 +93,13 @@ app.post("/webhook", async (req, res) => {
     const isComplete = action.data.checkItem.state === "complete";
 
     if (blocked(itemId)) {
-      console.log("🛑 ignore");
+      console.log("🛑 ignore loop");
       return;
     }
 
     console.log("📩", itemId, isComplete);
 
-    // ===== LOAD STEP =====
+    // ================= LOAD =================
     const { data: step } = await supabase
       .from("steps")
       .select("*")
@@ -96,7 +108,6 @@ app.post("/webhook", async (req, res) => {
 
     if (!step) return;
 
-    // ===== LOAD ALL =====
     const { data: all } = await supabase
       .from("steps")
       .select("*")
@@ -120,10 +131,10 @@ app.post("/webhook", async (req, res) => {
     const hasSub = subs.length > 0;
 
     // =================================================
-    // ❌ VALIDATION FIRST (สำคัญ)
+    // ❌ VALIDATION (STOP EVERYTHING IF FAIL)
     // =================================================
 
-    // ❌ ห้ามกด step อนาคต
+    // ❌ ห้ามกดอนาคต
     if (parentIndex > currentIndex) {
       await revert(cardId, itemId, isComplete ? "incomplete" : "complete");
       return;
@@ -135,7 +146,7 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ❌ parent ต้องกดตามลำดับ
+    // ❌ parent ต้องเรียง
     if (!step.parent_id && isComplete && parentIndex !== currentIndex) {
       await revert(cardId, itemId, "incomplete");
       return;
@@ -148,7 +159,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // =================================================
-    // ✅ UPDATE STEP
+    // ✅ UPDATE CURRENT STEP
     // =================================================
     await supabase
       .from("steps")
@@ -168,6 +179,7 @@ app.post("/webhook", async (req, res) => {
 
       const allDone = updatedSubs.every(s => s.status === "done");
 
+      // update parent
       await supabase
         .from("steps")
         .update({
@@ -175,12 +187,14 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", parent.id);
 
+      // 🔥 sync parent ONCE
       await sync(
         cardId,
         parent.trello_item_id,
         allDone ? "complete" : "incomplete"
       );
 
+      // 🔥 move
       const targetIndex = allDone
         ? parentIndex + 1
         : parentIndex;
@@ -195,7 +209,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // =================================================
-    // 🔥 NORMAL MOVE
+    // 🔥 NORMAL PARENT FLOW
     // =================================================
     const targetIndex = isComplete
       ? parentIndex + 1

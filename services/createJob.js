@@ -1,28 +1,21 @@
 import supabase from "../config/db.js";
-import {
-  createCard,
-  createChecklist,
-  addChecklistItem
-} from "./trello.js";
+import { createCard, createChecklist, addChecklistItem } from "./trello.js";
 
 export async function createJobWithSteps(body) {
   const { name, listId, job, steps } = body;
 
-  console.log("📥 create job:", body);
-
-  if (!name || !listId || !job || !steps || !steps.length) {
+  if (!name || !listId || !job || !steps) {
     throw new Error("missing required fields");
   }
 
-  // ===================================================
+  // =======================================================
   // 1. CREATE CARD
-  // ===================================================
+  // =======================================================
   const card = await createCard(name, listId);
-  console.log("✅ card:", card.id);
 
-  // ===================================================
-  // 2. CREATE JOB
-  // ===================================================
+  // =======================================================
+  // 2. CREATE JOB (DB)
+  // =======================================================
   const { data: jobRow, error: jobError } = await supabase
     .from("jobs")
     .insert({
@@ -32,31 +25,24 @@ export async function createJobWithSteps(body) {
     .select()
     .single();
 
-  if (jobError) {
-    console.error("❌ job error:", jobError);
-    throw jobError;
-  }
+  if (jobError) throw jobError;
 
-  console.log("✅ job:", jobRow.id);
-
-  // ===================================================
+  // =======================================================
   // 3. CREATE CHECKLIST
-  // ===================================================
+  // =======================================================
   const checklist = await createChecklist(card.id, "Workflow");
 
-  // ===================================================
-  // 4. CREATE STEPS
-  // ===================================================
+  // =======================================================
+  // 4. CREATE STEPS + SUBSTEPS
+  // =======================================================
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
 
-    console.log("👉 step:", step.name);
-
     if (!step.trello_list_id) {
-      throw new Error(`missing trello_list_id: ${step.name}`);
+      throw new Error(`Missing trello_list_id for step: ${step.name}`);
     }
 
-    // ✅ insert parent
+    // 🔥 create parent step
     const { data: parent, error: parentError } = await supabase
       .from("steps")
       .insert({
@@ -70,32 +56,27 @@ export async function createJobWithSteps(body) {
       .select()
       .single();
 
-    if (parentError) {
-      console.error("❌ parent insert error:", parentError);
-      throw parentError;
-    }
+    if (parentError) throw parentError;
 
-    console.log("✅ parent:", parent.id);
+    // 🔥 create parent checklist item
+    const parentItem = await addChecklistItem(checklist.id, step.name);
 
-    // ✅ create checklist item (parent)
-    const item = await addChecklistItem(checklist.id, step.name);
-
-    // map
+    // 🔥 map trello_item_id → parent
     await supabase
       .from("steps")
-      .update({ trello_item_id: item.id })
+      .update({
+        trello_item_id: parentItem.id
+      })
       .eq("id", parent.id);
 
     // ===================================================
     // 🔥 SUBSTEPS
     // ===================================================
-    if (step.substeps && step.substeps.length) {
+    if (step.substeps && step.substeps.length > 0) {
       for (let j = 0; j < step.substeps.length; j++) {
         const sub = step.substeps[j];
 
-        console.log("   ↳ sub:", sub.name);
-
-        // ✅ insert substep
+        // 🔥 create substep in DB
         const { data: subRow, error: subError } = await supabase
           .from("steps")
           .insert({
@@ -109,26 +90,24 @@ export async function createJobWithSteps(body) {
           .select()
           .single();
 
-        if (subError) {
-          console.error("❌ sub insert error:", subError);
-          throw subError;
-        }
+        if (subError) throw subError;
 
-        // ✅ create checklist item (sub)
+        // 🔥 create checklist item for substep
         const subItem = await addChecklistItem(
           checklist.id,
-          `- ${sub.name}`
+          `${step.name} - ${sub.name}`
         );
 
+        // 🔥 map trello_item_id → substep
         await supabase
           .from("steps")
-          .update({ trello_item_id: subItem.id })
+          .update({
+            trello_item_id: subItem.id
+          })
           .eq("id", subRow.id);
       }
     }
   }
-
-  console.log("🎉 DONE");
 
   return {
     success: true,
