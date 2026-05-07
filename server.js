@@ -123,10 +123,21 @@ app.post("/webhook", async (req, res) => {
 
     const subs = all.filter(s => s.parent_id === parent.id);
 
-    const parentIndex = parents.findIndex(p => p.id === parent.id);
+    const parentIndex = parents.findIndex(
+      p => p.id === parent.id
+    );
 
-    const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
-    const currentIndex = lastDoneIndex + 1;
+    // 🔥 safer than findLastIndex
+    const reversedIndex = [...parents]
+      .reverse()
+      .findIndex(p => p.status === "done");
+
+    const lastDoneIndex =
+      reversedIndex === -1
+        ? -1
+        : parents.length - 1 - reversedIndex;
+
+    const currentIndex = lastDoneIndex + 1;1;
 
     const hasSub = subs.length > 0;
 
@@ -140,9 +151,16 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ❌ parent มี sub → ห้ามกดเอง
-    if (!step.parent_id && hasSub && isComplete) {
-      await revert(cardId, itemId, "incomplete");
+    // ❌ parent ที่มี substep → user ห้ามแตะเด็ดขาด
+    if (!step.parent_id && hasSub && !blocked(itemId)) {
+      await revert(
+        cardId,
+        itemId,
+        step.status === "done"
+          ? "complete"
+          : "incomplete"
+      );
+
       return;
     }
 
