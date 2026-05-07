@@ -123,21 +123,21 @@ app.post("/webhook", async (req, res) => {
 
     const subs = all.filter(s => s.parent_id === parent.id);
 
-    const parentIndex = parents.findIndex(
-      p => p.id === parent.id
-    );
+    const parentIndex = parents.findIndex(p => p.id === parent.id);
 
-    // 🔥 safer than findLastIndex
-    const reversedIndex = [...parents]
-      .reverse()
-      .findIndex(p => p.status === "done");
+    // หา parent ล่าสุดที่ done แบบเรียงจริง
+    let currentIndex = 0;
 
-    const lastDoneIndex =
-      reversedIndex === -1
-        ? -1
-        : parents.length - 1 - reversedIndex;
+    for (let i = 0; i < parents.length; i++) {
+      if (parents[i].status === "done") {
+        currentIndex = i + 1;
+      } else {
+        break;
+      }
+    }
 
-    const currentIndex = lastDoneIndex + 1;1;
+    const lastDoneIndex = parents.findLastIndex(p => p.status === "done");
+    const currentIndex = lastDoneIndex + 1;
 
     const hasSub = subs.length > 0;
 
@@ -145,23 +145,38 @@ app.post("/webhook", async (req, res) => {
     // ❌ VALIDATION (STOP EVERYTHING IF FAIL)
     // =================================================
 
-    // ❌ ห้ามกดอนาคต
-    if (parentIndex > currentIndex) {
-      await revert(cardId, itemId, isComplete ? "incomplete" : "complete");
+    // ❌ ห้ามข้าม step ไปอนาคต
+    if (isComplete && parentIndex > currentIndex) {
+      await revert(cardId, itemId, "incomplete");
       return;
     }
 
-    // ❌ parent ที่มี substep → user ห้ามแตะเด็ดขาด
-    if (!step.parent_id && hasSub && !blocked(itemId)) {
-      await revert(
-        cardId,
-        itemId,
-        step.status === "done"
-          ? "complete"
-          : "incomplete"
-      );
-
+    // ❌ ห้าม uncheck step เก่า
+    if (
+      !isComplete &&
+      !step.parent_id &&
+      parentIndex !== currentIndex - 1
+    ) {
+      await revert(cardId, itemId, "complete");
       return;
+    }
+
+    // ❌ parent ที่มี substep → user ห้ามกดเอง
+    if (!step.parent_id && hasSub) {
+
+      // ถ้าไม่ได้มาจาก auto sync
+      if (!blocked(itemId)) {
+
+        await revert(
+          cardId,
+          itemId,
+          isComplete
+            ? "incomplete"
+            : "complete"
+        );
+
+        return;
+      }
     }
 
     // ❌ parent ต้องเรียง
