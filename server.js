@@ -227,21 +227,23 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // =================================================
-    // ❌ SUBSTEP MUST BE CURRENT
-    // =================================================
+    // ❌ substep check ได้เฉพาะ current step
     if (
       step.parent_id &&
+      isComplete &&
       parentIndex !== currentIndex
     ) {
-      await trelloSet(
-        cardId,
-        itemId,
-        isComplete
-          ? "incomplete"
-          : "complete"
-      );
+      await revert(cardId, itemId, "incomplete");
+      return;
+    }
 
+    // ❌ substep uncheck ได้เฉพาะ parent ล่าสุด
+    if (
+      step.parent_id &&
+      !isComplete &&
+      parentIndex !== currentIndex - 1
+    ) {
+      await revert(cardId, itemId, "complete");
       return;
     }
 
@@ -275,43 +277,51 @@ app.post("/webhook", async (req, res) => {
       // =============================================
       // AUTO CHECK / UNCHECK PARENT
       // =============================================
+
+      const newParentStatus = allDone
+        ? "done"
+        : "pending";
+
+      // update db
       await supabase
         .from("steps")
         .update({
-          status: allDone
-            ? "done"
-            : "pending",
+          status: newParentStatus,
         })
         .eq("id", parent.id);
 
-      await trelloSet(
-        cardId,
-        parent.trello_item_id,
-        allDone
-          ? "complete"
-          : "incomplete"
-      );
+      // sync trello เฉพาะตอน state เปลี่ยนจริง
+      if (parent.status !== newParentStatus) {
 
-      // =============================================
-      // MOVE CARD
-      // =============================================
-      const targetIndex = allDone
-        ? parentIndex + 1
-        : parentIndex;
-
-      const target =
-        parents[targetIndex] ||
-        parents[parentIndex];
-
-      if (target?.trello_list_id) {
-        await moveCard(
+        await trelloSet(
           cardId,
-          target.trello_list_id
+          parent.trello_item_id,
+          allDone
+            ? "complete"
+            : "incomplete"
         );
-      }
 
-      return;
-    }
+      }
+        // =============================================
+        // MOVE CARD
+        // =============================================
+        const targetIndex = allDone
+          ? parentIndex + 1
+          : parentIndex;
+
+        const target =
+          parents[targetIndex] ||
+          parents[parentIndex];
+
+        if (target?.trello_list_id) {
+          await moveCard(
+            cardId,
+            target.trello_list_id
+          );
+        }
+
+        return;
+      }
 
     // =================================================
     // NORMAL PARENT FLOW
