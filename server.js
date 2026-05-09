@@ -233,7 +233,7 @@ app.post("/webhook", async (req, res) => {
       isComplete &&
       parentIndex !== currentIndex
     ) {
-      await revert(cardId, itemId, "incomplete");
+      await trelloSet(cardId, itemId, "incomplete");
       return;
     }
 
@@ -243,7 +243,7 @@ app.post("/webhook", async (req, res) => {
       !isComplete &&
       parentIndex !== currentIndex - 1
     ) {
-      await revert(cardId, itemId, "complete");
+      await trelloSet(cardId, itemId, "complete");
       return;
     }
 
