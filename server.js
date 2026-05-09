@@ -237,15 +237,15 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ❌ substep uncheck ได้เฉพาะ parent ล่าสุด
-    if (
-      step.parent_id &&
-      !isComplete &&
-      parentIndex !== currentIndex - 1
-    ) {
-      await trelloSet(cardId, itemId, "complete");
-      return;
-    }
+    // // ❌ substep uncheck ได้เฉพาะ parent ล่าสุด
+    // if (
+    //   step.parent_id &&
+    //   !isComplete &&
+    //   parentIndex !== currentIndex - 1
+    // ) {
+    //   await trelloSet(cardId, itemId, "complete");
+    //   return;
+    // }
 
     // =================================================
     // UPDATE CURRENT STEP
