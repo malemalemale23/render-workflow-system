@@ -175,7 +175,44 @@ app.post("/webhook", async (req, res) => {
         break;
       }
     }
+    console.log("================================");
+    console.log("STEP:", step.name);
+    console.log("IS COMPLETE:", isComplete);
 
+    console.log(
+      "PARENT:",
+      parent.name,
+      "parentIndex=",
+      parentIndex
+    );
+
+    console.log(
+      "CURRENT INDEX:",
+      currentIndex
+    );
+
+    console.log(
+      "PARENT STATUS:",
+      parent.status
+    );
+
+    console.log(
+      "SUBS:",
+      substeps.map(x => ({
+        name: x.name,
+        status: x.status
+      }))
+    );
+
+    console.log(
+      "PARENTS:",
+      parents.map(x => ({
+        name: x.name,
+        status: x.status
+      }))
+    );
+
+    console.log("================================");
     // =================================================
     // ❌ USER CLICK PARENT WITH SUBSTEP
     // =================================================
@@ -197,6 +234,15 @@ app.post("/webhook", async (req, res) => {
     // =================================================
     // ❌ BLOCK FUTURE STEP
     // =================================================
+    console.log(
+      "CHECK FUTURE",
+      {
+        parentIndex,
+        currentIndex,
+        isComplete
+      }
+    );
+
     if (
       isComplete &&
       parentIndex > currentIndex
@@ -213,6 +259,16 @@ app.post("/webhook", async (req, res) => {
     // =================================================
     // ❌ BLOCK OLD UNCHECK
     // =================================================
+     console.log(
+      "CHECK OLD UNCHECK",
+      {
+        parentIndex,
+        currentIndex,
+        isComplete,
+        isSubstep: !!step.parent_id
+      }
+    );
+    
     if (
       !isComplete &&
       !step.parent_id &&
@@ -227,26 +283,19 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // =================================================
-    // ❌ SUBSTEP ต้องอยู่ parent ล่าสุดเท่านั้น
-    // =================================================
-    if (step.parent_id) {
-
-      const latestParentIndex = currentIndex - 1;
-
-      if (parentIndex !== latestParentIndex) {
-
-        await trelloSet(
-          cardId,
-          itemId,
-          isComplete
-            ? "incomplete"
-            : "complete"
-        );
-
-        return;
-      }
-
+   
+    // ❌ substep check ได้เฉพาะ current parent
+    if (
+      step.parent_id &&
+      isComplete &&
+      parentIndex !== currentIndex
+    ) {
+      await trelloSet(
+        cardId,
+        itemId,
+        "incomplete"
+      );
+      return;
     }
 
     // =================================================
@@ -260,7 +309,13 @@ app.post("/webhook", async (req, res) => {
           : "pending",
       })
       .eq("id", step.id);
-
+    
+    console.log(
+      "UPDATED STEP",
+      step.name,
+      "=>",
+      isComplete ? "done" : "pending"
+    );
     // =================================================
     // SUBSTEP FLOW
     // =================================================
@@ -275,7 +330,25 @@ app.post("/webhook", async (req, res) => {
       const allDone = freshSubs.every(
         x => x.status === "done"
       );
+      console.log("SUBSTEP FLOW");
 
+      console.log(
+        "freshSubs",
+        freshSubs.map(x => ({
+          name: x.name,
+          status: x.status
+        }))
+      );
+
+      console.log(
+        "allDone =",
+        allDone
+      );
+
+      console.log(
+        "parent.status =",
+        parent.status
+      );
       // =============================================
       // AUTO CHECK / UNCHECK PARENT
       // =============================================
@@ -293,8 +366,18 @@ app.post("/webhook", async (req, res) => {
         .eq("id", parent.id);
 
       // sync trello เฉพาะตอน state เปลี่ยนจริง
+      console.log(
+        "newParentStatus =",
+        newParentStatus
+      );
       if (parent.status !== newParentStatus) {
 
+        console.log(
+          "AUTO SYNC PARENT",
+          parent.name,
+          "=>",
+          newParentStatus
+        );
         await trelloSet(
           cardId,
           parent.trello_item_id,
@@ -315,6 +398,19 @@ app.post("/webhook", async (req, res) => {
           parents[targetIndex] ||
           parents[parentIndex];
 
+        console.log(
+          "MOVE CALC",
+          {
+            parentIndex,
+            targetIndex
+          }
+        );
+
+        console.log(
+          "TARGET",
+          target?.name,
+          target?.trello_list_id
+        );
         if (target?.trello_list_id) {
           await moveCard(
             cardId,
@@ -335,7 +431,21 @@ app.post("/webhook", async (req, res) => {
     const target =
       parents[targetIndex] ||
       parents[parentIndex];
+    
+      
+    console.log(
+      "MOVE CALC",
+      {
+        parentIndex,
+        targetIndex
+      }
+    );
 
+    console.log(
+      "TARGET",
+      target?.name,
+      target?.trello_list_id
+    );
     if (target?.trello_list_id) {
       await moveCard(
         cardId,
