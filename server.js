@@ -227,23 +227,17 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ❌ substep check ได้เฉพาะ current step
+    // ❌ substep check ได้เฉพาะ current parent
     if (
       step.parent_id &&
       isComplete &&
       parentIndex !== currentIndex
     ) {
-      await trelloSet(cardId, itemId, "incomplete");
-      return;
-    }
-
-    // ❌ substep uncheck ได้เฉพาะ parent ล่าสุด
-    if (
-      step.parent_id &&
-      !isComplete &&
-      parentIndex !== currentIndex - 1
-    ) {
-      await trelloSet(cardId, itemId, "complete");
+      await trelloSet(
+        cardId,
+        itemId,
+        "incomplete"
+      );
       return;
     }
 
