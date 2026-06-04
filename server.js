@@ -227,29 +227,27 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-    // ❌ substep check ได้เฉพาะ current parent
-    if (
-      step.parent_id &&
-      isComplete &&
-      parentIndex !== currentIndex
-    ) {
-      await trelloSet(
-        cardId,
-        itemId,
-        "incomplete"
-      );
-      return;
-    }
+    // =================================================
+    // ❌ SUBSTEP ต้องอยู่ parent ล่าสุดเท่านั้น
+    // =================================================
+    if (step.parent_id) {
 
-    // // ❌ substep uncheck ได้เฉพาะ parent ล่าสุด
-    // if (
-    //   step.parent_id &&
-    //   !isComplete &&
-    //   parentIndex !== currentIndex - 1
-    // ) {
-    //   await trelloSet(cardId, itemId, "complete");
-    //   return;
-    // }
+      const latestParentIndex = currentIndex - 1;
+
+      if (parentIndex !== latestParentIndex) {
+
+        await trelloSet(
+          cardId,
+          itemId,
+          isComplete
+            ? "incomplete"
+            : "complete"
+        );
+
+        return;
+      }
+
+    }
 
     // =================================================
     // UPDATE CURRENT STEP
