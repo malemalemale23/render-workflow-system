@@ -284,17 +284,25 @@ app.post("/webhook", async (req, res) => {
     }
 
    
-    // ❌ substep check ได้เฉพาะ current parent
+    // ❌ substep uncheck ได้เฉพาะ current parent
     if (
       step.parent_id &&
-      isComplete &&
-      parentIndex !== currentIndex
+      !isComplete &&
+      parentIndex !== currentIndex - 1
     ) {
+      console.log(
+        "BLOCK SUBSTEP UNCHECK",
+        parent.name,
+        parentIndex,
+        currentIndex
+      );
+
       await trelloSet(
         cardId,
         itemId,
-        "incomplete"
+        "complete"
       );
+
       return;
     }
 
