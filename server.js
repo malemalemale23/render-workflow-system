@@ -288,7 +288,7 @@ app.post("/webhook", async (req, res) => {
     if (
       step.parent_id &&
       !isComplete &&
-      parentIndex !== currentIndex - 1
+      parentIndex < currentIndex
     ) {
       console.log(
         "BLOCK SUBSTEP UNCHECK",
