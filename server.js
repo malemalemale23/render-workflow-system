@@ -34,6 +34,8 @@ async function withJobLock(jobId, fn) {
 // MOVE DEBOUNCE
 // =====================================================
 
+const moveTimers = new Map();
+
 async function scheduleMove(cardId, listId) {
 
   const oldTimer =
