@@ -283,18 +283,35 @@ app.post("/webhook", async (req, res) => {
       return;
     }
 
-   
-    // ❌ substep uncheck ได้เฉพาะ current parent
+    const laterParents = parents.filter(
+      p => p.step_order > parent.step_order
+    );
+
+    const laterParentIds = laterParents.map(
+      p => p.id
+    );
+
+    const futureChecked = all.some(s => {
+
+      const isFutureParent =
+        laterParentIds.includes(s.id);
+
+      const isFutureSub =
+        laterParentIds.includes(s.parent_id);
+
+      return (
+        (isFutureParent || isFutureSub) &&
+        s.status === "done"
+      );
+    });
+    
     if (
       step.parent_id &&
       !isComplete &&
-      parentIndex < currentIndex - 1
+      futureChecked
     ) {
       console.log(
-        "BLOCK SUBSTEP UNCHECK",
-        parent.name,
-        parentIndex,
-        currentIndex
+        "BLOCK: future step still done"
       );
 
       await trelloSet(
@@ -305,6 +322,27 @@ app.post("/webhook", async (req, res) => {
 
       return;
     }
+    // // ❌ substep uncheck ได้เฉพาะ current parent
+    // if (
+    //   step.parent_id &&
+    //   !isComplete &&
+    //   parentIndex < currentIndex - 1
+    // ) {
+    //   console.log(
+    //     "BLOCK SUBSTEP UNCHECK",
+    //     parent.name,
+    //     parentIndex,
+    //     currentIndex
+    //   );
+
+    //   await trelloSet(
+    //     cardId,
+    //     itemId,
+    //     "complete"
+    //   );
+
+    //   return;
+    // }
 
     // =================================================
     // UPDATE CURRENT STEP
