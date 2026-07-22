@@ -136,6 +136,24 @@ async function moveCard(cardId, listId) {
   );
 }
 
+async function updateCurrentStep(jobId, nextStepId) {
+
+  const { data: job } = await supabase
+    .from("jobs")
+    .select("current_step_id")
+    .eq("id", jobId)
+    .single();
+
+  await supabase
+    .from("jobs")
+    .update({
+      last_step_id: job.current_step_id,
+      current_step_id: nextStepId
+    })
+    .eq("id", jobId);
+
+}
+
 // =====================================================
 // CREATE JOB
 // =====================================================
@@ -411,6 +429,14 @@ app.post("/webhook", async (req, res) => {
         })
         .eq("id", step.id);
       
+      await supabase
+        .from("jobs")
+        .update({
+          last_step_id: step.id,
+          current_step_id: step.id
+        })
+        .eq("id", step.job_id);
+        
       console.log(
         "UPDATED STEP",
         step.name,
@@ -512,6 +538,12 @@ app.post("/webhook", async (req, res) => {
             target?.name,
             target?.trello_list_id
           );
+
+          await updateCurrentStep(
+              step.job_id,
+              target.id
+          );
+
           if (target?.trello_list_id) {
             await scheduleMove(
               cardId,
@@ -547,6 +579,12 @@ app.post("/webhook", async (req, res) => {
         target?.name,
         target?.trello_list_id
       );
+
+      await updateCurrentStep(
+          step.job_id,
+          target.id
+      );
+        
       if (target?.trello_list_id) {
         await scheduleMove(
           cardId,

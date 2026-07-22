@@ -20,7 +20,7 @@ export async function createJobWithSteps(body) {
     .from("jobs")
     .insert({
       po_number: job.po_number,
-      customer: job.customer
+      customer: job.customer,
     })
     .select()
     .single();
@@ -55,8 +55,18 @@ export async function createJobWithSteps(body) {
       })
       .select()
       .single();
-
+      
     if (parentError) throw parentError;
+
+    // ตั้ง Current Step ตอนสร้างงาน
+    if (i === 0) {
+      await supabase
+        .from("jobs")
+        .update({
+          current_step_id: parent.id
+        })
+        .eq("id", jobRow.id);
+    }
 
     // 🔥 create parent checklist item
     const parentItem = await addChecklistItem(checklist.id, step.name);
