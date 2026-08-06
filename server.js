@@ -611,7 +611,9 @@ async function handleChecklist(action){
 
 async function handleCustomField(action) {
 
-    console.log("CUSTOM FIELD");
+  console.log("========== CUSTOM FIELD ==========");
+
+  console.log(JSON.stringify(action, null, 2));
 
 }
 
