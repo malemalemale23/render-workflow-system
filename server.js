@@ -182,423 +182,439 @@ app.post("/webhook", async (req, res) => {
 
     if (!action) return;
 
-    if (action.type !== "updateCheckItemStateOnCard") return;
-
-    const cardId = action.data.card.id;
-    const itemId = action.data.checkItem.id;
-    const isComplete =
-      action.data.checkItem.state === "complete";
-
-    if (isIgnored(itemId)) {
-      console.log("🛑 ignored");
-      return;
+    if (action.type === "updateCheckItemStateOnCard") {
+      return handleChecklist(action);
     }
 
-    console.log("📩", itemId, isComplete);
+    if (action.type === "updateCustomFieldItem") {
+      return handleCustomField(action);
+    }
 
-    // =================================================
-    // LOAD STEP
-    // =================================================
-    const { data: step } = await supabase
-      .from("steps")
-      .select("*")
-      .eq("trello_item_id", itemId)
-      .single();
-
-    if (!step) return;
-
-    await withJobLock(
-      step.job_id,
-      async () => {
-      // =================================================
-      // LOAD ALL
-      // =================================================
-      const { data: all } = await supabase
-        .from("steps")
-        .select("*")
-        .eq("job_id", step.job_id);
-
-      const parents = all
-        .filter(x => !x.parent_id)
-        .sort((a, b) => a.step_order - b.step_order);
-
-      const parent = step.parent_id
-        ? all.find(x => x.id === step.parent_id)
-        : step;
-
-      const substeps = all.filter(
-        x => x.parent_id === parent.id
-      );
-
-      const hasSubsteps = substeps.length > 0;
-
-      const parentIndex = parents.findIndex(
-        x => x.id === parent.id
-      );
-
-      // =================================================
-      // FIND CURRENT STEP
-      // =================================================
-      let currentIndex = 0;
-
-      for (let i = 0; i < parents.length; i++) {
-        if (parents[i].status === "done") {
-          currentIndex = i + 1;
-        } else {
-          break;
-        }
-      }
-      console.log("================================");
-      console.log("STEP:", step.name);
-      console.log("IS COMPLETE:", isComplete);
-
-      console.log(
-        "PARENT:",
-        parent.name,
-        "parentIndex=",
-        parentIndex
-      );
-
-      console.log(
-        "CURRENT INDEX:",
-        currentIndex
-      );
-
-      console.log(
-        "PARENT STATUS:",
-        parent.status
-      );
-
-      console.log(
-        "SUBS:",
-        substeps.map(x => ({
-          name: x.name,
-          status: x.status
-        }))
-      );
-
-      console.log(
-        "PARENTS:",
-        parents.map(x => ({
-          name: x.name,
-          status: x.status
-        }))
-      );
-
-      console.log("================================");
-      // =================================================
-      // ❌ USER CLICK PARENT WITH SUBSTEP
-      // =================================================
-      if (
-        !step.parent_id &&
-        hasSubsteps
-      ) {
-        await trelloSet(
-          cardId,
-          itemId,
-          step.status === "done"
-            ? "complete"
-            : "incomplete"
-        );
-
-        return;
-      }
-
-      // =================================================
-      // ❌ BLOCK FUTURE STEP
-      // =================================================
-      console.log(
-        "CHECK FUTURE",
-        {
-          parentIndex,
-          currentIndex,
-          isComplete
-        }
-      );
-
-      if (
-        isComplete &&
-        parentIndex > currentIndex
-      ) {
-        await trelloSet(
-          cardId,
-          itemId,
-          "incomplete"
-        );
-
-        return;
-      }
-
-      // =================================================
-      // ❌ BLOCK OLD UNCHECK
-      // =================================================
-      console.log(
-        "CHECK OLD UNCHECK",
-        {
-          parentIndex,
-          currentIndex,
-          isComplete,
-          isSubstep: !!step.parent_id
-        }
-      );
-      
-      if (
-        !isComplete &&
-        !step.parent_id &&
-        parentIndex !== currentIndex - 1
-      ) {
-        await trelloSet(
-          cardId,
-          itemId,
-          "complete"
-        );
-
-        return;
-      }
-
-      const laterParents = parents.filter(
-        p => p.step_order > parent.step_order
-      );
-
-      const laterParentIds = laterParents.map(
-        p => p.id
-      );
-
-      const futureChecked = all.some(s => {
-
-        const isFutureParent =
-          laterParentIds.includes(s.id);
-
-        const isFutureSub =
-          laterParentIds.includes(s.parent_id);
-
-        return (
-          (isFutureParent || isFutureSub) &&
-          s.status === "done"
-        );
-      });
-      
-      if (
-        step.parent_id &&
-        !isComplete &&
-        futureChecked
-      ) {
-        console.log(
-          "BLOCK: future step still done"
-        );
-
-        await trelloSet(
-          cardId,
-          itemId,
-          "complete"
-        );
-
-        return;
-      }
-      // // ❌ substep uncheck ได้เฉพาะ current parent
-      // if (
-      //   step.parent_id &&
-      //   !isComplete &&
-      //   parentIndex < currentIndex - 1
-      // ) {
-      //   console.log(
-      //     "BLOCK SUBSTEP UNCHECK",
-      //     parent.name,
-      //     parentIndex,
-      //     currentIndex
-      //   );
-
-      //   await trelloSet(
-      //     cardId,
-      //     itemId,
-      //     "complete"
-      //   );
-
-      //   return;
-      // }
-
-      // =================================================
-      // UPDATE CURRENT STEP
-      // =================================================
-      await supabase
-        .from("steps")
-        .update({
-          status: isComplete
-            ? "done"
-            : "pending",
-        })
-        .eq("id", step.id);
-      
-      await supabase
-        .from("jobs")
-        .update({
-          last_step_id: step.id,
-          current_step_id: step.id
-        })
-        .eq("id", step.job_id);
-        
-      console.log(
-        "UPDATED STEP",
-        step.name,
-        "=>",
-        isComplete ? "done" : "pending"
-      );
-      // =================================================
-      // SUBSTEP FLOW
-      // =================================================
-      if (step.parent_id) {
-
-        // reload fresh
-        const { data: freshSubs } = await supabase
-          .from("steps")
-          .select("*")
-          .eq("parent_id", parent.id);
-
-        const allDone = freshSubs.every(
-          x => x.status === "done"
-        );
-        console.log("SUBSTEP FLOW");
-
-        console.log(
-          "freshSubs",
-          freshSubs.map(x => ({
-            name: x.name,
-            status: x.status
-          }))
-        );
-
-        console.log(
-          "allDone =",
-          allDone
-        );
-
-        console.log(
-          "parent.status =",
-          parent.status
-        );
-        // =============================================
-        // AUTO CHECK / UNCHECK PARENT
-        // =============================================
-
-        const newParentStatus = allDone
-          ? "done"
-          : "pending";
-
-        // update db
-        await supabase
-          .from("steps")
-          .update({
-            status: newParentStatus,
-          })
-          .eq("id", parent.id);
-
-        // sync trello เฉพาะตอน state เปลี่ยนจริง
-        console.log(
-          "newParentStatus =",
-          newParentStatus
-        );
-        if (parent.status !== newParentStatus) {
-
-          console.log(
-            "AUTO SYNC PARENT",
-            parent.name,
-            "=>",
-            newParentStatus
-          );
-          await trelloSet(
-            cardId,
-            parent.trello_item_id,
-            allDone
-              ? "complete"
-              : "incomplete"
-          );
-
-        }
-          // =============================================
-          // MOVE CARD
-          // =============================================
-          const targetIndex = allDone
-            ? parentIndex + 1
-            : parentIndex;
-
-          const target =
-            parents[targetIndex] ||
-            parents[parentIndex];
-
-          console.log(
-            "MOVE CALC",
-            {
-              parentIndex,
-              targetIndex
-            }
-          );
-
-          console.log(
-            "TARGET",
-            target?.name,
-            target?.trello_list_id
-          );
-
-          await updateCurrentStep(
-              step.job_id,
-              target.id
-          );
-
-          if (target?.trello_list_id) {
-            await scheduleMove(
-              cardId,
-              target.trello_list_id
-            );
-          }
-
-          return;
-        }
-
-      // =================================================
-      // NORMAL PARENT FLOW
-      // =================================================
-      const targetIndex = isComplete
-        ? parentIndex + 1
-        : parentIndex;
-
-      const target =
-        parents[targetIndex] ||
-        parents[parentIndex];
-      
-        
-      console.log(
-        "MOVE CALC",
-        {
-          parentIndex,
-          targetIndex
-        }
-      );
-
-      console.log(
-        "TARGET",
-        target?.name,
-        target?.trello_list_id
-      );
-
-      await updateCurrentStep(
-          step.job_id,
-          target.id
-      );
-        
-      if (target?.trello_list_id) {
-        await scheduleMove(
-          cardId,
-          target.trello_list_id
-        );
-      }
-
-          }
-    );
-
+    
   } catch (err) {
     console.error("ERR:", err.message);
   }
 });
+
+async function handleChecklist(action){
+  const cardId = action.data.card.id;
+  const itemId = action.data.checkItem.id;
+  const isComplete =
+    action.data.checkItem.state === "complete";
+
+  if (isIgnored(itemId)) {
+    console.log("🛑 ignored");
+    return;
+  }
+
+  console.log("📩", itemId, isComplete);
+
+  // =================================================
+  // LOAD STEP
+  // =================================================
+  const { data: step } = await supabase
+    .from("steps")
+    .select("*")
+    .eq("trello_item_id", itemId)
+    .single();
+
+  if (!step) return;
+
+  await withJobLock(
+    step.job_id,
+    async () => {
+    // =================================================
+    // LOAD ALL
+    // =================================================
+    const { data: all } = await supabase
+      .from("steps")
+      .select("*")
+      .eq("job_id", step.job_id);
+
+    const parents = all
+      .filter(x => !x.parent_id)
+      .sort((a, b) => a.step_order - b.step_order);
+
+    const parent = step.parent_id
+      ? all.find(x => x.id === step.parent_id)
+      : step;
+
+    const substeps = all.filter(
+      x => x.parent_id === parent.id
+    );
+
+    const hasSubsteps = substeps.length > 0;
+
+    const parentIndex = parents.findIndex(
+      x => x.id === parent.id
+    );
+
+    // =================================================
+    // FIND CURRENT STEP
+    // =================================================
+    let currentIndex = 0;
+
+    for (let i = 0; i < parents.length; i++) {
+      if (parents[i].status === "done") {
+        currentIndex = i + 1;
+      } else {
+        break;
+      }
+    }
+    console.log("================================");
+    console.log("STEP:", step.name);
+    console.log("IS COMPLETE:", isComplete);
+
+    console.log(
+      "PARENT:",
+      parent.name,
+      "parentIndex=",
+      parentIndex
+    );
+
+    console.log(
+      "CURRENT INDEX:",
+      currentIndex
+    );
+
+    console.log(
+      "PARENT STATUS:",
+      parent.status
+    );
+
+    console.log(
+      "SUBS:",
+      substeps.map(x => ({
+        name: x.name,
+        status: x.status
+      }))
+    );
+
+    console.log(
+      "PARENTS:",
+      parents.map(x => ({
+        name: x.name,
+        status: x.status
+      }))
+    );
+
+    console.log("================================");
+    // =================================================
+    // ❌ USER CLICK PARENT WITH SUBSTEP
+    // =================================================
+    if (
+      !step.parent_id &&
+      hasSubsteps
+    ) {
+      await trelloSet(
+        cardId,
+        itemId,
+        step.status === "done"
+          ? "complete"
+          : "incomplete"
+      );
+
+      return;
+    }
+
+    // =================================================
+    // ❌ BLOCK FUTURE STEP
+    // =================================================
+    console.log(
+      "CHECK FUTURE",
+      {
+        parentIndex,
+        currentIndex,
+        isComplete
+      }
+    );
+
+    if (
+      isComplete &&
+      parentIndex > currentIndex
+    ) {
+      await trelloSet(
+        cardId,
+        itemId,
+        "incomplete"
+      );
+
+      return;
+    }
+
+    // =================================================
+    // ❌ BLOCK OLD UNCHECK
+    // =================================================
+    console.log(
+      "CHECK OLD UNCHECK",
+      {
+        parentIndex,
+        currentIndex,
+        isComplete,
+        isSubstep: !!step.parent_id
+      }
+    );
+    
+    if (
+      !isComplete &&
+      !step.parent_id &&
+      parentIndex !== currentIndex - 1
+    ) {
+      await trelloSet(
+        cardId,
+        itemId,
+        "complete"
+      );
+
+      return;
+    }
+
+    const laterParents = parents.filter(
+      p => p.step_order > parent.step_order
+    );
+
+    const laterParentIds = laterParents.map(
+      p => p.id
+    );
+
+    const futureChecked = all.some(s => {
+
+      const isFutureParent =
+        laterParentIds.includes(s.id);
+
+      const isFutureSub =
+        laterParentIds.includes(s.parent_id);
+
+      return (
+        (isFutureParent || isFutureSub) &&
+        s.status === "done"
+      );
+    });
+    
+    if (
+      step.parent_id &&
+      !isComplete &&
+      futureChecked
+    ) {
+      console.log(
+        "BLOCK: future step still done"
+      );
+
+      await trelloSet(
+        cardId,
+        itemId,
+        "complete"
+      );
+
+      return;
+    }
+    // // ❌ substep uncheck ได้เฉพาะ current parent
+    // if (
+    //   step.parent_id &&
+    //   !isComplete &&
+    //   parentIndex < currentIndex - 1
+    // ) {
+    //   console.log(
+    //     "BLOCK SUBSTEP UNCHECK",
+    //     parent.name,
+    //     parentIndex,
+    //     currentIndex
+    //   );
+
+    //   await trelloSet(
+    //     cardId,
+    //     itemId,
+    //     "complete"
+    //   );
+
+    //   return;
+    // }
+
+    // =================================================
+    // UPDATE CURRENT STEP
+    // =================================================
+    await supabase
+      .from("steps")
+      .update({
+        status: isComplete
+          ? "done"
+          : "pending",
+      })
+      .eq("id", step.id);
+    
+    await supabase
+      .from("jobs")
+      .update({
+        last_step_id: step.id,
+        current_step_id: step.id
+      })
+      .eq("id", step.job_id);
+      
+    console.log(
+      "UPDATED STEP",
+      step.name,
+      "=>",
+      isComplete ? "done" : "pending"
+    );
+    // =================================================
+    // SUBSTEP FLOW
+    // =================================================
+    if (step.parent_id) {
+
+      // reload fresh
+      const { data: freshSubs } = await supabase
+        .from("steps")
+        .select("*")
+        .eq("parent_id", parent.id);
+
+      const allDone = freshSubs.every(
+        x => x.status === "done"
+      );
+      console.log("SUBSTEP FLOW");
+
+      console.log(
+        "freshSubs",
+        freshSubs.map(x => ({
+          name: x.name,
+          status: x.status
+        }))
+      );
+
+      console.log(
+        "allDone =",
+        allDone
+      );
+
+      console.log(
+        "parent.status =",
+        parent.status
+      );
+      // =============================================
+      // AUTO CHECK / UNCHECK PARENT
+      // =============================================
+
+      const newParentStatus = allDone
+        ? "done"
+        : "pending";
+
+      // update db
+      await supabase
+        .from("steps")
+        .update({
+          status: newParentStatus,
+        })
+        .eq("id", parent.id);
+
+      // sync trello เฉพาะตอน state เปลี่ยนจริง
+      console.log(
+        "newParentStatus =",
+        newParentStatus
+      );
+      if (parent.status !== newParentStatus) {
+
+        console.log(
+          "AUTO SYNC PARENT",
+          parent.name,
+          "=>",
+          newParentStatus
+        );
+        await trelloSet(
+          cardId,
+          parent.trello_item_id,
+          allDone
+            ? "complete"
+            : "incomplete"
+        );
+
+      }
+        // =============================================
+        // MOVE CARD
+        // =============================================
+        const targetIndex = allDone
+          ? parentIndex + 1
+          : parentIndex;
+
+        const target =
+          parents[targetIndex] ||
+          parents[parentIndex];
+
+        console.log(
+          "MOVE CALC",
+          {
+            parentIndex,
+            targetIndex
+          }
+        );
+
+        console.log(
+          "TARGET",
+          target?.name,
+          target?.trello_list_id
+        );
+
+        await updateCurrentStep(
+            step.job_id,
+            target.id
+        );
+
+        if (target?.trello_list_id) {
+          await scheduleMove(
+            cardId,
+            target.trello_list_id
+          );
+        }
+
+        return;
+      }
+
+    // =================================================
+    // NORMAL PARENT FLOW
+    // =================================================
+    const targetIndex = isComplete
+      ? parentIndex + 1
+      : parentIndex;
+
+    const target =
+      parents[targetIndex] ||
+      parents[parentIndex];
+    
+      
+    console.log(
+      "MOVE CALC",
+      {
+        parentIndex,
+        targetIndex
+      }
+    );
+
+    console.log(
+      "TARGET",
+      target?.name,
+      target?.trello_list_id
+    );
+
+    await updateCurrentStep(
+        step.job_id,
+        target.id
+    );
+      
+    if (target?.trello_list_id) {
+      await scheduleMove(
+        cardId,
+        target.trello_list_id
+      );
+    }
+
+        }
+  );
+}
+
+async function handleCustomField(action) {
+
+    console.log("CUSTOM FIELD");
+
+}
+
 
 app.listen(process.env.PORT || 3000, () => {
   console.log("🚀 running");
